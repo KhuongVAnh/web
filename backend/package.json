@@ -1,0 +1,39 @@
+{
+  "name": "library-seat-management-backend",
+  "version": "1.0.0",
+  "description": "Backend cho Hệ Thống Quản Lý Bàn Học Thư Viện",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "node --watch src/index.js",
+    "start": "node src/index.js",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:studio": "prisma studio",
+    "prisma:reset": "prisma migrate reset",
+    "setup": "npm install && npm run prisma:generate && npx prisma migrate deploy && npm run seed",
+    "seed": "node seed.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@prisma/client": "^6.0.0",
+    "amqp-connection-manager": "^5.0.0",
+    "amqplib": "^0.10.9",
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "express-validator": "^7.0.0",
+    "jsonwebtoken": "^9.0.0",
+    "mqtt": "^5.3.3",
+    "amqplib": "^0.10.3",
+    "amqp-connection-manager": "^4.1.14"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.10.6",
+    "prisma": "^6.0.0"
+  }
+}

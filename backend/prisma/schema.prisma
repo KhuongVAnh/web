@@ -1,0 +1,103 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        Int      @id @default(autoincrement())
+  email     String   @unique
+  username  String   @unique
+  password  String
+  role      String   @default("user") // "user" or "admin"
+  fullName  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([email])
+  @@index([username])
+}
+
+model StudyRoom {
+  id        Int      @id @default(autoincrement())
+  roomNumber Int     @unique // 1-5
+  name      String
+  desks     Desk[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([roomNumber])
+}
+
+model Desk {
+  id       Int       @id @default(autoincrement())
+  roomId   Int
+  room     StudyRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  row      Int // 1-4 (4 rows per room)
+  position Int // 1-5 (5 tables per row)
+  seats    Int       @default(2) // 2 seats per table
+
+  // Device configuration
+  lampPowerW  Float   @default(10.0) // Wattage of desk lamp
+  lightStatus Boolean @default(false) // Current light state
+
+  // Sensor configuration
+  distanceSensitivity Float     @default(30.0) // Distance threshold in cm for occupancy
+  lastSensorReading   Float? // Last distance reading
+  sensorReadingTime   DateTime?
+
+  // ESP32 device ID (only table 1 of room 1 has ESP32)
+  esp32DeviceId String? @unique
+
+  energyRecords EnergyRecord[]
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  @@unique([roomId, row, position])
+  @@index([roomId])
+}
+
+model EnergyRecord {
+  id              Int       @id @default(autoincrement())
+  deskId          Int
+  desk            Desk      @relation(fields: [deskId], references: [id], onDelete: Cascade)
+  powerW          Float // Power in watts
+  durationMinutes Int // Duration of usage in minutes
+  energyWh        Float // Energy in watt-hours
+  startTime       DateTime // When the session started
+  endTime         DateTime? // When the session ended (null if still active)
+  createdAt       DateTime  @default(now())
+
+  @@index([deskId, startTime])
+}
+
+model ESP32Config {
+  id       Int    @id @default(autoincrement())
+  deviceId String @unique
+
+  // Sampling frequencies
+  fs1 Int @default(3) // HC-SR04 sampling frequency
+  fs2 Int @default(2) // BH1750 sampling frequency
+  fs3 Int @default(1) // DHT sampling frequency
+
+  // Distance threshold
+  distanceCm Float @default(30.0)
+
+  // Data transmission duration
+  duration Int @default(4000) // in milliseconds
+
+  // Minimum session duration (only sessions >= this duration will be saved)
+  minimumSessionDurationMinutes Int @default(5) // in minutes
+
+  lastSync  DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([deviceId])
+}
