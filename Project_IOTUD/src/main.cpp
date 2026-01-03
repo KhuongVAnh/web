@@ -8,8 +8,8 @@
 #include <ArduinoJson.h>
 
 // ========== WiFi ==========
-const char *WIFI_SSID = "Nhan Home";
-const char *WIFI_PASSWORD = "nhanhome";
+const char *WIFI_SSID = "Tầng 1";
+const char *WIFI_PASSWORD = "chinsomuoi";
 
 // ========== MQTT HiveMQ Cloud ==========
 const char *MQTT_BROKER = "5b91e3ce790f41e78062533f58758704.s1.eu.hivemq.cloud";

@@ -11,11 +11,11 @@ datasource db {
 }
 
 model User {
-  id        Int      @id @default(autoincrement())
-  email     String   @unique
-  username  String   @unique
+  id        Int     @id @default(autoincrement())
+  email     String  @unique
+  username  String  @unique
   password  String
-  role      String   @default("user") // "user" or "admin"
+  role      String  @default("user") // "user" or "admin"
   fullName  String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -25,10 +25,11 @@ model User {
 }
 
 model StudyRoom {
-  id        Int      @id @default(autoincrement())
-  roomNumber Int     @unique // 1-5
+  id        Int     @id @default(autoincrement())
+  roomNumber Int    @unique // 1-5
   name      String
   desks     Desk[]
+  dhtReadings DHT[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -36,68 +37,96 @@ model StudyRoom {
 }
 
 model Desk {
-  id       Int       @id @default(autoincrement())
-  roomId   Int
-  room     StudyRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
-  row      Int // 1-4 (4 rows per room)
-  position Int // 1-5 (5 tables per row)
-  seats    Int       @default(2) // 2 seats per table
-
+  id              Int     @id @default(autoincrement())
+  roomId          Int
+  room            StudyRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  row             Int     // 1-4 (4 rows per room)
+  position        Int     // 1-5 (5 tables per row)
+  seats           Int     @default(2) // 2 seats per table
+  
   // Device configuration
-  lampPowerW  Float   @default(10.0) // Wattage of desk lamp
-  lightStatus Boolean @default(false) // Current light state
-
+  lampPowerW      Float   @default(10.0) // Wattage of desk lamp
+  lightStatus     Boolean @default(false) // Current light state
+  
+  // Sensor data
+  occupancyStatus Boolean @default(false) // Is desk occupied
+  occupancyStartTime DateTime? // When current occupancy started
+  totalUsageMinutes Int @default(0) // Total accumulated usage
+  
+  // Energy tracking
+  energyConsumedWh Float @default(0.0) // Energy consumed in Wh
+  
   // Sensor configuration
-  distanceSensitivity Float     @default(30.0) // Distance threshold in cm for occupancy
-  lastSensorReading   Float? // Last distance reading
-  sensorReadingTime   DateTime?
-
+  distanceSensitivity Float @default(30.0) // Distance threshold in cm for occupancy
+  lastSensorReading Float? // Last distance reading
+  sensorReadingTime DateTime?
+  
   // ESP32 device ID (only table 1 of room 1 has ESP32)
-  esp32DeviceId String? @unique
-
-  energyRecords EnergyRecord[]
-  createdAt     DateTime        @default(now())
-  updatedAt     DateTime        @updatedAt
+  esp32DeviceId   String? @unique
+  
+  sensorReadings  SensorReading[]
+  energyRecords   EnergyRecord[]
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
   @@unique([roomId, row, position])
   @@index([roomId])
+  @@index([occupancyStatus])
+}
+
+model SensorReading {
+  id          Int     @id @default(autoincrement())
+  deskId      Int
+  desk        Desk    @relation(fields: [deskId], references: [id], onDelete: Cascade)
+  distanceCm  Float   // Distance reading from HC-SR04
+  occupied    Boolean
+  createdAt   DateTime @default(now())
+
+  @@index([deskId, createdAt])
+}
+
+model DHT {
+  id          Int     @id @default(autoincrement())
+  roomId      Int
+  room        StudyRoom @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  temperature Float
+  humidity    Float
+  createdAt   DateTime @default(now())
+
+  @@index([roomId, createdAt])
 }
 
 model EnergyRecord {
-  id              Int       @id @default(autoincrement())
+  id              Int     @id @default(autoincrement())
   deskId          Int
-  desk            Desk      @relation(fields: [deskId], references: [id], onDelete: Cascade)
-  powerW          Float // Power in watts
-  durationMinutes Int // Duration of usage in minutes
-  energyWh        Float // Energy in watt-hours
-  startTime       DateTime // When the session started
-  endTime         DateTime? // When the session ended (null if still active)
-  createdAt       DateTime  @default(now())
+  desk            Desk    @relation(fields: [deskId], references: [id], onDelete: Cascade)
+  powerW          Float   // Power in watts
+  durationMinutes Int     // Duration of usage
+  energyWh        Float   // Energy in watt-hours
+  createdAt       DateTime @default(now())
 
-  @@index([deskId, startTime])
+  @@index([deskId, createdAt])
 }
 
 model ESP32Config {
-  id       Int    @id @default(autoincrement())
-  deviceId String @unique
-
+  id        Int     @id @default(autoincrement())
+  deviceId  String  @unique
+  
   // Sampling frequencies
-  fs1 Int @default(3) // HC-SR04 sampling frequency
-  fs2 Int @default(2) // BH1750 sampling frequency
-  fs3 Int @default(1) // DHT sampling frequency
-
+  fs1       Int     @default(3)       // HC-SR04 sampling frequency
+  fs2       Int     @default(2)       // BH1750 sampling frequency
+  fs3       Int     @default(1)       // DHT sampling frequency
+  
   // Distance threshold
-  distanceCm Float @default(30.0)
-
+  distanceCm Float    @default(30.0)
+  
   // Data transmission duration
-  duration Int @default(4000) // in milliseconds
-
-  // Minimum session duration (only sessions >= this duration will be saved)
-  minimumSessionDurationMinutes Int @default(5) // in minutes
-
+  duration  Int       @default(4000)    // in milliseconds
+  
   lastSync  DateTime?
+  
+  @@index([deviceId])
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
-
-  @@index([deviceId])
 }
+

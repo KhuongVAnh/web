@@ -42,7 +42,7 @@ export default function UserDashboard() {
     )
   }
 
-  const occupiedCount = selectedRoom?.desks?.filter((d) => d.isOccupied).length || 0
+  const occupiedCount = selectedRoom?.desks?.filter((d) => d.occupancyStatus).length || 0
   const totalDesks = selectedRoom?.desks?.length || 0
 
   // Organize desks by row
@@ -64,10 +64,10 @@ export default function UserDashboard() {
 
   // Calculate usage time for occupied desks
   const getUsageTime = (desk) => {
-    // Usage time is now calculated from EnergyRecord on backend
-    // Return 0 if not occupied, or use currentUsageMinutes if provided
-    if (!desk.isOccupied) return 0
-    return desk.currentUsageMinutes || 0
+    if (!desk.occupancyStatus || !desk.occupancyStartTime) return 0
+    const startTime = new Date(desk.occupancyStartTime)
+    const now = new Date()
+    return Math.floor((now - startTime) / 60000) // minutes
   }
 
   return (
@@ -84,9 +84,7 @@ export default function UserDashboard() {
             <Thermometer className="w-5 h-5 text-red-600" />
           </div>
           <p className="text-3xl font-bold text-gray-900">
-            {selectedRoom?.currentTemperature !== null && selectedRoom?.currentTemperature !== undefined
-              ? `${selectedRoom.currentTemperature.toFixed(1)}°C`
-              : "NA"}
+            {selectedRoom?.currentTemperature?.toFixed(1) || "22.0"}°C
           </p>
           <p className="text-xs text-gray-600 mt-1">Điều kiện phòng</p>
         </div>
@@ -97,9 +95,7 @@ export default function UserDashboard() {
             <Droplets className="w-5 h-5 text-blue-600" />
           </div>
           <p className="text-3xl font-bold text-gray-900">
-            {selectedRoom?.currentHumidity !== null && selectedRoom?.currentHumidity !== undefined
-              ? `${selectedRoom.currentHumidity.toFixed(1)}%`
-              : "NA"}
+            {selectedRoom?.currentHumidity?.toFixed(1) || "60.0"}%
           </p>
           <p className="text-xs text-gray-600 mt-1">Độ ẩm không khí</p>
         </div>
@@ -120,19 +116,20 @@ export default function UserDashboard() {
 
       {/* Room Selection */}
       <div className="bg-white rounded-lg shadow p-6">
-        <h3 className="text-lg font-bold text-gray-900 mb-4">Xem phòng</h3>
+        <h3 className="text-lg font-bold text-gray-900 mb-4">Chọn Phòng</h3>
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2">
           {rooms.map((room) => {
-            const roomOccupied = room.desks?.filter((d) => d.isOccupied).length || 0
+            const roomOccupied = room.desks?.filter((d) => d.occupancyStatus).length || 0
             const roomTotal = room.desks?.length || 0
             return (
               <button
                 key={room.id}
                 onClick={() => setSelectedRoomId(room.id)}
-                className={`p-3 rounded-lg transition ${selectedRoomId === room.id
+                className={`p-3 rounded-lg transition ${
+                  selectedRoomId === room.id
                     ? "bg-blue-600 text-white shadow-md"
                     : "bg-gray-100 hover:bg-gray-200 text-gray-900"
-                  }`}
+                }`}
               >
                 <div className="font-semibold">{room.name}</div>
                 <div className="text-xs mt-1">
@@ -150,13 +147,7 @@ export default function UserDashboard() {
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-lg font-bold text-gray-900">Sơ Đồ Bàn Học - {selectedRoom.name}</h3>
             <div className="text-sm text-gray-600">
-              {selectedRoom.currentTemperature !== null && selectedRoom.currentTemperature !== undefined
-                ? `${selectedRoom.currentTemperature.toFixed(1)}°C`
-                : "NA"}{" "}
-              /{" "}
-              {selectedRoom.currentHumidity !== null && selectedRoom.currentHumidity !== undefined
-                ? `${selectedRoom.currentHumidity.toFixed(1)}%`
-                : "NA"}
+              {selectedRoom.currentTemperature?.toFixed(1)}°C / {selectedRoom.currentHumidity?.toFixed(1)}%
             </div>
           </div>
 
@@ -171,10 +162,11 @@ export default function UserDashboard() {
                     return (
                       <div
                         key={desk.id}
-                        className={`p-3 rounded-lg border-2 transition ${desk.isOccupied
+                        className={`p-3 rounded-lg border-2 transition ${
+                          desk.occupancyStatus
                             ? "bg-red-50 border-red-300"
                             : "bg-green-50 border-green-300"
-                          }`}
+                        }`}
                       >
                         <div className="flex items-center justify-between mb-1">
                           <span className="text-xs font-semibold text-gray-700">
@@ -185,7 +177,7 @@ export default function UserDashboard() {
                           )}
                         </div>
 
-                        {desk.isOccupied ? (
+                        {desk.occupancyStatus ? (
                           <div className="space-y-1">
                             <div className="flex items-center gap-1 text-xs text-red-700">
                               <User className="w-3 h-3" />

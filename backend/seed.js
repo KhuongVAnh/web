@@ -6,6 +6,8 @@ async function main() {
   console.log("🌱 Starting database seed...")
 
   // Clear existing data
+  await prisma.sensorReading.deleteMany()
+  await prisma.dHT.deleteMany()
   await prisma.energyRecord.deleteMany()
   await prisma.eSP32Config.deleteMany()
   await prisma.desk.deleteMany()
@@ -74,6 +76,8 @@ async function main() {
             seats: 2,
             lampPowerW: 10.0,
             lightStatus: initialOccupied, // Light on if occupied
+            occupancyStatus: initialOccupied, // Fixed state
+            occupancyStartTime: initialOccupied ? new Date() : null,
             distanceSensitivity: 30.0,
             esp32DeviceId: isESP32Desk ? `ESP32-${room.id}-${row}-${position}` : null,
             // Set initial sensor reading for fixed desks
@@ -87,38 +91,24 @@ async function main() {
 
   console.log("✅ Created desks (4 rows x 5 tables per room = 20 desks per room, 100 total)")
 
-  // Create ESP32 config for ESP32 desk (Room 1, Row 1, Table 1)
-  const esp32Desk = await prisma.desk.findFirst({
-    where: {
-      roomId: rooms[0].id,
-      row: 1,
-      position: 1,
-    },
-  })
-
-  if (esp32Desk && esp32Desk.esp32DeviceId) {
-    await prisma.eSP32Config.create({
+  // Create initial DHT readings for each room
+  for (const room of rooms) {
+    await prisma.dHT.create({
       data: {
-        deviceId: esp32Desk.esp32DeviceId,
-        fs1: 3,
-        fs2: 2,
-        fs3: 1,
-        distanceCm: 30.0,
-        duration: 4000,
-        minimumSessionDurationMinutes: 5,
+        roomId: room.id,
+        temperature: 22 + Math.random() * 4,
+        humidity: 60 + Math.random() * 20,
       },
     })
-    console.log("✅ Created ESP32 config")
   }
 
+  console.log("✅ Created initial DHT readings")
   console.log("\n🎉 Database seeded successfully!")
   console.log("\n📌 Login Credentials:")
   console.log("   👤 User:  username: user, password: 12345678")
   console.log("   👨‍💼 Admin: username: admin, password: 12345678")
   console.log("\n📡 ESP32 is attached to Room 1, Row 1, Table 1")
   console.log("   ⚠️  Other 99 desks have FIXED status and will NOT change during runtime")
-  console.log("   📊 Only Room 1 has DHT data from ESP32, other rooms will show 'NA'")
-  console.log("   ⏱️  Only sessions >= 5 minutes will be saved to EnergyRecord")
 }
 
 main()

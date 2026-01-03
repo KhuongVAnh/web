@@ -1,6 +1,5 @@
 import { prisma } from "../index.js"
 import { publishConfig } from "../services/mqtt-client.js"
-import { isDeskOccupied, getDeskState, setDeskUnoccupied } from "../services/desk-state.js"
 import dotenv from "dotenv"
 
 dotenv.config()
@@ -8,32 +7,6 @@ dotenv.config()
 const ESP32_DISABLE_DISTANCE_CM = Number.parseFloat(process.env.ESP32_DISABLE_DISTANCE_CM || "4")
 const ESP32_ENABLE_DISTANCE_CM = Number.parseFloat(process.env.ESP32_ENABLE_DISTANCE_CM || "30")
 
-/**
- * getAllDesks - Lấy danh sách tất cả các bàn học
- * 
- * @description Lấy danh sách tất cả bàn học kèm thông tin phòng, sắp xếp theo roomId, row, position
- * 
- * @param {Object} req - Express request object
- * @param {Object} res - Express response object
- * 
- * @returns {Object} 200 - Success response với array of desks
- * @returns {Object} 500 - Error response nếu có lỗi server
- * 
- * @example
- * // Response
- * [
- *   {
- *     "id": 1,
- *     "roomId": 1,
- *     "row": 1,
- *     "position": 1,
- *     "occupancyStatus": true,
- *     "lightStatus": true,
- *     "room": { ... }
- *   },
- *   ...
- * ]
- */
 export const getAllDesks = async (req, res) => {
   try {
     const desks = await prisma.desk.findMany({
@@ -46,66 +19,20 @@ export const getAllDesks = async (req, res) => {
         { position: "asc" },
       ],
     })
-
-    // Calculate occupancy status real-time from EnergyRecord
-    // A desk is occupied if it has an EnergyRecord with endTime = null
-    const desksWithStatus = await Promise.all(
-      desks.map(async (desk) => {
-        const latestRecord = await prisma.energyRecord.findFirst({
-          where: { deskId: desk.id },
-          orderBy: { startTime: "desc" },
-        })
-
-        const isOccupied = latestRecord?.endTime === null || isDeskOccupied(desk.id)
-
-        return {
-          ...desk,
-          isOccupied, // Use isOccupied instead of occupancyStatus
-        }
-      })
-    )
-
-    res.json(desksWithStatus)
+    res.json(desks)
   } catch (error) {
     res.status(500).json({ message: error.message })
   }
 }
 
-/**
- * getDeskById - Lấy thông tin chi tiết của một bàn học
- * 
- * @description Lấy thông tin chi tiết bàn học theo ID, bao gồm sensor readings và energy records
- * 
- * @param {Object} req - Express request object
- * @param {Object} req.params - Route parameters
- * @param {String} req.params.id - Desk ID
- * 
- * @param {Object} res - Express response object
- * 
- * @returns {Object} 200 - Success response với desk object và currentUsageMinutes
- * @returns {Object} 404 - Error response nếu không tìm thấy desk
- * @returns {Object} 500 - Error response nếu có lỗi server
- * 
- * @example
- * // Response
- * {
- *   "id": 1,
- *   "roomId": 1,
- *   "row": 1,
- *   "position": 1,
- *   "occupancyStatus": true,
- *   "currentUsageMinutes": 45,
- *   "sensorReadings": [...],
- *   "energyRecords": [...]
- * }
- */
 export const getDeskById = async (req, res) => {
   try {
     const desk = await prisma.desk.findUnique({
       where: { id: Number.parseInt(req.params.id) },
       include: {
         room: true,
-        energyRecords: { orderBy: { startTime: "desc" }, take: 10 },
+        sensorReadings: { orderBy: { createdAt: "desc" }, take: 10 },
+        energyRecords: { orderBy: { createdAt: "desc" }, take: 10 },
       },
     })
 
@@ -113,31 +40,14 @@ export const getDeskById = async (req, res) => {
       return res.status(404).json({ message: "Desk not found" })
     }
 
-    // Calculate occupancy status and current usage time from EnergyRecord
-    const latestRecord = await prisma.energyRecord.findFirst({
-      where: { deskId: desk.id },
-      orderBy: { startTime: "desc" },
-    })
-
-    const isOccupied = latestRecord?.endTime === null || isDeskOccupied(desk.id)
+    // Calculate current usage time if occupied
     let currentUsageMinutes = 0
-
-    if (isOccupied) {
-      if (latestRecord?.endTime === null && latestRecord?.startTime) {
-        // Calculate from EnergyRecord
-        currentUsageMinutes = Math.floor((new Date() - latestRecord.startTime) / 60000)
-      } else {
-        // Calculate from in-memory state
-        const state = getDeskState(desk.id)
-        if (state?.startTime) {
-          currentUsageMinutes = Math.floor((new Date() - state.startTime) / 60000)
-        }
-      }
+    if (desk.occupancyStatus && desk.occupancyStartTime) {
+      currentUsageMinutes = Math.floor((new Date() - desk.occupancyStartTime) / 60000)
     }
 
     res.json({
       ...desk,
-      isOccupied, // Use isOccupied instead of occupancyStatus
       currentUsageMinutes,
     })
   } catch (error) {
@@ -145,34 +55,6 @@ export const getDeskById = async (req, res) => {
   }
 }
 
-/**
- * toggleLight - Bật/tắt đèn bàn học
- * 
- * @description Bật hoặc tắt đèn bàn học. Nếu là ESP32 desk, cũng cập nhật occupancy status và gửi config qua MQTT
- * 
- * @param {Object} req - Express request object
- * @param {Object} req.params - Route parameters
- * @param {String} req.params.id - Desk ID
- * @param {Object} req.user - User object từ auth middleware (chỉ admin)
- * 
- * @param {Object} res - Express response object
- * 
- * @returns {Object} 200 - Success response với updated desk object
- * @returns {Object} 404 - Error response nếu không tìm thấy desk
- * @returns {Object} 500 - Error response nếu có lỗi server
- * 
- * @example
- * // Request
- * PATCH /api/desks/1/toggle-light
- * 
- * // Response
- * {
- *   "id": 1,
- *   "lightStatus": true,
- *   "occupancyStatus": true,
- *   ...
- * }
- */
 export const toggleLight = async (req, res) => {
   try {
     const desk = await prisma.desk.findUnique({
@@ -192,70 +74,30 @@ export const toggleLight = async (req, res) => {
     // If this is ESP32 desk, also update occupancy and send MQTT config
     if (isESP32Desk) {
       if (!newLightStatus) {
-        // Tắt bàn: distanceCm = ESP32_DISABLE_DISTANCE_CM (tắt hoạt động phần cứng)
-        // End current session if exists
-        const now = new Date()
+        // Tắt bàn: set occupancy = false, distanceCm = ESP32_DISABLE_DISTANCE_CM (tắt hoạt động phần cứng)
+        updateData.occupancyStatus = false
+        updateData.occupancyStartTime = null
         
-        // Check if there's an active session (from EnergyRecord or in-memory state)
-        const latestRecord = await prisma.energyRecord.findFirst({
-          where: { deskId: desk.id },
-          orderBy: { startTime: "desc" },
-        })
+        // Calculate energy if was occupied
+        if (desk.occupancyStatus && desk.occupancyStartTime) {
+          const now = new Date()
+          const usageMinutes = Math.floor((now - desk.occupancyStartTime) / 60000)
+          const totalUsage = desk.totalUsageMinutes + usageMinutes
+          const energyWh = (desk.lampPowerW * usageMinutes) / 60
+          const totalEnergy = desk.energyConsumedWh + energyWh
 
-        const hasActiveSession = latestRecord?.endTime === null || isDeskOccupied(desk.id)
+          // Save energy record
+          await prisma.energyRecord.create({
+            data: {
+              deskId: desk.id,
+              powerW: desk.lampPowerW,
+              durationMinutes: usageMinutes,
+              energyWh: energyWh,
+            },
+          })
 
-        if (hasActiveSession) {
-          let startTime = null
-          
-          // Get start time from EnergyRecord or in-memory state
-          if (latestRecord?.endTime === null && latestRecord?.startTime) {
-            startTime = latestRecord.startTime
-          } else {
-            const state = getDeskState(desk.id)
-            if (state?.startTime) {
-              startTime = state.startTime
-            }
-          }
-
-          if (startTime) {
-            const usageMinutes = Math.floor((now - startTime) / 60000)
-            const deviceId = desk.esp32DeviceId || `ESP32-${desk.id}`
-            const esp32Config = await prisma.eSP32Config.findFirst({
-              where: { deviceId },
-            })
-            const minimumDuration = esp32Config?.minimumSessionDurationMinutes || 5
-
-            // Only save if session >= minimum duration
-            if (usageMinutes >= minimumDuration) {
-              const energyWh = (desk.lampPowerW * usageMinutes) / 60
-
-              // Update existing record or create new one
-              if (latestRecord?.endTime === null) {
-                await prisma.energyRecord.update({
-                  where: { id: latestRecord.id },
-                  data: {
-                    endTime: now,
-                    durationMinutes: usageMinutes,
-                    energyWh: energyWh,
-                  },
-                })
-              } else {
-                await prisma.energyRecord.create({
-                  data: {
-                    deskId: desk.id,
-                    powerW: desk.lampPowerW,
-                    durationMinutes: usageMinutes,
-                    energyWh: energyWh,
-                    startTime: startTime,
-                    endTime: now,
-                  },
-                })
-              }
-            }
-
-            // Clear in-memory state
-            setDeskUnoccupied(desk.id)
-          }
+          updateData.totalUsageMinutes = totalUsage
+          updateData.energyConsumedWh = totalEnergy
         }
 
         // Send MQTT config to turn off hardware (distanceCm = 4)
@@ -351,6 +193,7 @@ export const toggleLight = async (req, res) => {
 
     if (isESP32Desk) {
       console.log(`[Toggle Light] ${newLightStatus ? "✅ BẬT" : "❌ TẮT"} ESP32 bàn ${desk.row}-${desk.position}`)
+      console.log(`[Toggle Light]   - occupancyStatus: ${updateData.occupancyStatus !== undefined ? updateData.occupancyStatus : desk.occupancyStatus}`)
       console.log(`[Toggle Light]   - lightStatus: ${newLightStatus}`)
       console.log(`[Toggle Light]   - distanceCm: ${updateData.distanceSensitivity !== undefined ? updateData.distanceSensitivity : desk.distanceSensitivity}`)
     } else {
@@ -363,40 +206,6 @@ export const toggleLight = async (req, res) => {
   }
 }
 
-/**
- * updateDeskConfig - Cập nhật cấu hình bàn học
- * 
- * @description Cập nhật công suất đèn (lampPowerW) và độ nhạy cảm biến (distanceSensitivity) của bàn học
- * 
- * @param {Object} req - Express request object
- * @param {Object} req.params - Route parameters
- * @param {String} req.params.id - Desk ID
- * @param {Object} req.body - Request body
- * @param {Number} [req.body.lampPowerW] - Công suất đèn (Watt)
- * @param {Number} [req.body.distanceSensitivity] - Ngưỡng khoảng cách để phát hiện occupancy (cm)
- * @param {Object} req.user - User object từ auth middleware (chỉ admin)
- * 
- * @param {Object} res - Express response object
- * 
- * @returns {Object} 200 - Success response với updated desk object
- * @returns {Object} 500 - Error response nếu có lỗi server
- * 
- * @example
- * // Request
- * PATCH /api/desks/1/config
- * {
- *   "lampPowerW": 15.0,
- *   "distanceSensitivity": 25.0
- * }
- * 
- * // Response
- * {
- *   "id": 1,
- *   "lampPowerW": 15.0,
- *   "distanceSensitivity": 25.0,
- *   ...
- * }
- */
 export const updateDeskConfig = async (req, res) => {
   try {
     const { lampPowerW, distanceSensitivity } = req.body
@@ -420,45 +229,13 @@ export const updateDeskConfig = async (req, res) => {
   }
 }
 
-/**
- * getDeskEnergy - Lấy thông tin tiêu thụ năng lượng của bàn học
- * 
- * @description Lấy tổng năng lượng tiêu thụ, tổng thời gian sử dụng và danh sách energy records
- * 
- * @param {Object} req - Express request object
- * @param {Object} req.params - Route parameters
- * @param {String} req.params.id - Desk ID
- * 
- * @param {Object} res - Express response object
- * 
- * @returns {Object} 200 - Success response với energy data
- * @returns {Object} 404 - Error response nếu không tìm thấy desk
- * @returns {Object} 500 - Error response nếu có lỗi server
- * 
- * @example
- * // Response
- * {
- *   "totalEnergyWh": 1234.56,
- *   "totalUsageMinutes": 7890,
- *   "records": [
- *     {
- *       "id": 1,
- *       "powerW": 10.0,
- *       "durationMinutes": 60,
- *       "energyWh": 10.0,
- *       "createdAt": "2025-01-01T00:00:00.000Z"
- *     },
- *     ...
- *   ]
- * }
- */
 export const getDeskEnergy = async (req, res) => {
   try {
     const desk = await prisma.desk.findUnique({
       where: { id: Number.parseInt(req.params.id) },
       include: {
         energyRecords: {
-          orderBy: { startTime: "desc" },
+          orderBy: { createdAt: "desc" },
           take: 100,
         },
       },
@@ -468,13 +245,9 @@ export const getDeskEnergy = async (req, res) => {
       return res.status(404).json({ message: "Desk not found" })
     }
 
-    // Tính toán tổng từ energyRecords
-    const totalEnergyWh = desk.energyRecords.reduce((sum, record) => sum + record.energyWh, 0)
-    const totalUsageMinutes = desk.energyRecords.reduce((sum, record) => sum + record.durationMinutes, 0)
-
     res.json({
-      totalEnergyWh,
-      totalUsageMinutes,
+      totalEnergyWh: desk.energyConsumedWh,
+      totalUsageMinutes: desk.totalUsageMinutes,
       records: desk.energyRecords,
     })
   } catch (error) {

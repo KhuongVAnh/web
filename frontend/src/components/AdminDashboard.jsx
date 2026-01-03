@@ -81,7 +81,7 @@ export default function AdminDashboard({ activeTab, setActiveTab }) {
   const handleToggleLight = async (deskId) => {
     // Add desk to toggling set
     setTogglingDesks((prev) => new Set(prev).add(deskId))
-
+    
     try {
       const response = await axios.patch(
         `${API_BASE}/desks/${deskId}/toggle-light`,
@@ -90,16 +90,16 @@ export default function AdminDashboard({ activeTab, setActiveTab }) {
           headers: { Authorization: `Bearer ${token}` },
         },
       )
-
+      
       // Refresh rooms to get updated state
       const roomsResponse = await axios.get(`${API_BASE}/rooms`)
       setRooms(roomsResponse.data)
-
+      
       // Show success message
       const desk = roomsResponse.data
         .flatMap((r) => r.desks || [])
         .find((d) => d.id === deskId)
-
+      
       if (desk) {
         const isESP32Desk = desk.roomId === 1 && desk.row === 1 && desk.position === 1
         if (isESP32Desk) {
@@ -253,7 +253,7 @@ export default function AdminDashboard({ activeTab, setActiveTab }) {
   const desksByRow = organizeDesksByRow(selectedRoom?.desks || [])
 
   const getUsageTime = (desk) => {
-    if (!desk.isOccupied) return 0
+    if (!desk.occupancyStatus || !desk.occupancyStartTime) return 0
     const startTime = new Date(desk.occupancyStartTime)
     const now = new Date()
     return Math.floor((now - startTime) / 60000)
@@ -278,37 +278,41 @@ export default function AdminDashboard({ activeTab, setActiveTab }) {
       <div className="flex gap-2 border-b overflow-x-auto">
         <button
           onClick={() => setActiveTab("overview")}
-          className={`px-4 py-2 font-medium border-b-2 transition whitespace-nowrap ${activeTab === "overview"
+          className={`px-4 py-2 font-medium border-b-2 transition whitespace-nowrap ${
+            activeTab === "overview"
               ? "border-blue-600 text-blue-600"
               : "border-transparent text-gray-600 hover:text-gray-900"
-            }`}
+          }`}
         >
           Tổng Quan
         </button>
         <button
           onClick={() => setActiveTab("desks")}
-          className={`px-4 py-2 font-medium border-b-2 transition whitespace-nowrap ${activeTab === "desks"
+          className={`px-4 py-2 font-medium border-b-2 transition whitespace-nowrap ${
+            activeTab === "desks"
               ? "border-blue-600 text-blue-600"
               : "border-transparent text-gray-600 hover:text-gray-900"
-            }`}
+          }`}
         >
           Quản Lý Bàn
         </button>
         <button
           onClick={() => setActiveTab("config")}
-          className={`px-4 py-2 font-medium border-b-2 transition whitespace-nowrap ${activeTab === "config"
+          className={`px-4 py-2 font-medium border-b-2 transition whitespace-nowrap ${
+            activeTab === "config"
               ? "border-blue-600 text-blue-600"
               : "border-transparent text-gray-600 hover:text-gray-900"
-            }`}
+          }`}
         >
           Cấu Hình
         </button>
         <button
           onClick={() => setActiveTab("reports")}
-          className={`px-4 py-2 font-medium border-b-2 transition whitespace-nowrap ${activeTab === "reports"
+          className={`px-4 py-2 font-medium border-b-2 transition whitespace-nowrap ${
+            activeTab === "reports"
               ? "border-blue-600 text-blue-600"
               : "border-transparent text-gray-600 hover:text-gray-900"
-            }`}
+          }`}
         >
           Báo Cáo Năng Lượng
         </button>
@@ -336,55 +340,12 @@ export default function AdminDashboard({ activeTab, setActiveTab }) {
             </div>
           </div>
 
-          {/* Temperature and Humidity Overview - Average across all rooms */}
-          {rooms.length > 0 && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="bg-gradient-to-br from-red-50 to-red-100 rounded-lg p-6 shadow-sm">
-                <div className="flex items-center justify-between mb-2">
-                  <h3 className="text-sm font-medium text-gray-700">Nhiệt Độ Trung Bình</h3>
-                  <Thermometer className="w-6 h-6 text-red-600" />
-                </div>
-                <p className="text-4xl font-bold text-gray-900">
-                  {(() => {
-                    const validTemps = rooms
-                      .map((r) => r.currentTemperature)
-                      .filter((t) => t !== null && t !== undefined)
-                    return validTemps.length > 0
-                      ? (validTemps.reduce((sum, t) => sum + t, 0) / validTemps.length).toFixed(1)
-                      : "NA"
-                  })()}
-                  {rooms.some((r) => r.currentTemperature !== null && r.currentTemperature !== undefined) && "°C"}
-                </p>
-                <p className="text-xs text-gray-600 mt-2">Trung bình tất cả các phòng</p>
-              </div>
-
-              <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-lg p-6 shadow-sm">
-                <div className="flex items-center justify-between mb-2">
-                  <h3 className="text-sm font-medium text-gray-700">Độ Ẩm Trung Bình</h3>
-                  <Droplets className="w-6 h-6 text-blue-600" />
-                </div>
-                <p className="text-4xl font-bold text-gray-900">
-                  {(() => {
-                    const validHumidities = rooms
-                      .map((r) => r.currentHumidity)
-                      .filter((h) => h !== null && h !== undefined)
-                    return validHumidities.length > 0
-                      ? (validHumidities.reduce((sum, h) => sum + h, 0) / validHumidities.length).toFixed(1)
-                      : "NA"
-                  })()}
-                  {rooms.some((r) => r.currentHumidity !== null && r.currentHumidity !== undefined) && "%"}
-                </p>
-                <p className="text-xs text-gray-600 mt-2">Trung bình tất cả các phòng</p>
-              </div>
-            </div>
-          )}
-
           {/* Room Overview */}
           <div className="bg-white rounded-lg shadow p-6">
             <h3 className="text-lg font-bold text-gray-900 mb-4">Tổng Quan Phòng Học</h3>
             <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
               {rooms.map((room) => {
-                const occupied = room.desks?.filter((d) => d.isOccupied).length || 0
+                const occupied = room.desks?.filter((d) => d.occupancyStatus).length || 0
                 const total = room.desks?.length || 0
                 const energy = room.desks?.reduce((sum, d) => sum + d.energyConsumedWh, 0) || 0
                 return (
@@ -399,29 +360,11 @@ export default function AdminDashboard({ activeTab, setActiveTab }) {
                         <span className="text-gray-600">Năng lượng:</span>
                         <span className="font-medium">{energy.toFixed(1)} Wh</span>
                       </div>
-                      <div className="mt-3 pt-3 border-t border-gray-200">
-                        <div className="flex items-center justify-between mb-1">
-                          <div className="flex items-center gap-1 text-xs text-gray-600">
-                            <Thermometer className="w-3 h-3 text-red-600" />
-                            <span>Nhiệt độ:</span>
-                          </div>
-                          <span className="font-semibold text-red-600">
-                            {room.currentTemperature !== null && room.currentTemperature !== undefined
-                              ? `${room.currentTemperature.toFixed(1)}°C`
-                              : "NA"}
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-1 text-xs text-gray-600">
-                            <Droplets className="w-3 h-3 text-blue-600" />
-                            <span>Độ ẩm:</span>
-                          </div>
-                          <span className="font-semibold text-blue-600">
-                            {room.currentHumidity !== null && room.currentHumidity !== undefined
-                              ? `${room.currentHumidity.toFixed(1)}%`
-                              : "NA"}
-                          </span>
-                        </div>
+                      <div className="flex items-center gap-1 text-xs text-gray-600 mt-2">
+                        <Thermometer className="w-3 h-3" />
+                        <span>{room.currentTemperature?.toFixed(1)}°C</span>
+                        <Droplets className="w-3 h-3 ml-2" />
+                        <span>{room.currentHumidity?.toFixed(1)}%</span>
                       </div>
                     </div>
                   </div>
@@ -436,19 +379,20 @@ export default function AdminDashboard({ activeTab, setActiveTab }) {
       {activeTab === "desks" && (
         <div className="space-y-6">
           <div className="bg-white rounded-lg shadow p-6">
-            <h3 className="text-lg font-bold text-gray-900 mb-4">Xem phòng</h3>
+            <h3 className="text-lg font-bold text-gray-900 mb-4">Chọn Phòng</h3>
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2">
               {rooms.map((room) => {
-                const occupied = room.desks?.filter((d) => d.isOccupied).length || 0
+                const occupied = room.desks?.filter((d) => d.occupancyStatus).length || 0
                 const total = room.desks?.length || 0
                 return (
                   <button
                     key={room.id}
                     onClick={() => setSelectedRoomId(room.id)}
-                    className={`p-3 rounded-lg transition ${selectedRoomId === room.id
+                    className={`p-3 rounded-lg transition ${
+                      selectedRoomId === room.id
                         ? "bg-blue-600 text-white shadow-md"
                         : "bg-gray-100 hover:bg-gray-200 text-gray-900"
-                      }`}
+                    }`}
                   >
                     <div className="font-semibold">{room.name}</div>
                     <div className="text-xs mt-1">{occupied}/{total} bàn</div>
@@ -462,34 +406,8 @@ export default function AdminDashboard({ activeTab, setActiveTab }) {
             <div className="bg-white rounded-lg shadow p-6">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-bold text-gray-900">Điều Khiển Bàn - {selectedRoom.name}</h3>
-              </div>
-
-              {/* Temperature and Humidity Cards for Selected Room */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-                <div className="bg-gradient-to-br from-red-50 to-red-100 rounded-lg p-4 shadow-sm">
-                  <div className="flex items-center justify-between mb-2">
-                    <h4 className="text-sm font-medium text-gray-700">Nhiệt Độ</h4>
-                    <Thermometer className="w-5 h-5 text-red-600" />
-                  </div>
-                  <p className="text-3xl font-bold text-gray-900">
-                    {selectedRoom.currentTemperature !== null && selectedRoom.currentTemperature !== undefined
-                      ? `${selectedRoom.currentTemperature.toFixed(1)}°C`
-                      : "NA"}
-                  </p>
-                  <p className="text-xs text-gray-600 mt-1">Điều kiện phòng hiện tại</p>
-                </div>
-
-                <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-lg p-4 shadow-sm">
-                  <div className="flex items-center justify-between mb-2">
-                    <h4 className="text-sm font-medium text-gray-700">Độ Ẩm</h4>
-                    <Droplets className="w-5 h-5 text-blue-600" />
-                  </div>
-                  <p className="text-3xl font-bold text-gray-900">
-                    {selectedRoom.currentHumidity !== null && selectedRoom.currentHumidity !== undefined
-                      ? `${selectedRoom.currentHumidity.toFixed(1)}%`
-                      : "NA"}
-                  </p>
-                  <p className="text-xs text-gray-600 mt-1">Độ ẩm không khí hiện tại</p>
+                <div className="text-sm text-gray-600">
+                  {selectedRoom.currentTemperature?.toFixed(1)}°C / {selectedRoom.currentHumidity?.toFixed(1)}%
                 </div>
               </div>
 
@@ -503,10 +421,11 @@ export default function AdminDashboard({ activeTab, setActiveTab }) {
                         return (
                           <div
                             key={desk.id}
-                            className={`p-3 rounded-lg border-2 transition ${desk.isOccupied
+                            className={`p-3 rounded-lg border-2 transition ${
+                              desk.occupancyStatus
                                 ? "bg-red-50 border-red-300"
                                 : "bg-green-50 border-green-300"
-                              }`}
+                            }`}
                           >
                             <div className="flex items-center justify-between mb-1">
                               <span className="text-xs font-semibold text-gray-700">
@@ -517,7 +436,7 @@ export default function AdminDashboard({ activeTab, setActiveTab }) {
                               )}
                             </div>
 
-                            {desk.isOccupied && (
+                            {desk.occupancyStatus && (
                               <div className="flex items-center gap-1 text-xs text-red-700 mb-1">
                                 <User className="w-3 h-3" />
                                 <span>Đang dùng</span>
@@ -535,12 +454,13 @@ export default function AdminDashboard({ activeTab, setActiveTab }) {
                               <button
                                 onClick={() => handleToggleLight(desk.id)}
                                 disabled={togglingDesks.has(desk.id)}
-                                className={`flex-1 px-2 py-1 text-xs rounded transition flex items-center justify-center gap-1 ${togglingDesks.has(desk.id)
+                                className={`flex-1 px-2 py-1 text-xs rounded transition flex items-center justify-center gap-1 ${
+                                  togglingDesks.has(desk.id)
                                     ? "bg-gray-400 text-gray-600 cursor-not-allowed opacity-75"
                                     : desk.lightStatus
-                                      ? "bg-yellow-400 text-yellow-900 hover:bg-yellow-500"
-                                      : "bg-gray-300 text-gray-700 hover:bg-gray-400"
-                                  }`}
+                                    ? "bg-yellow-400 text-yellow-900 hover:bg-yellow-500"
+                                    : "bg-gray-300 text-gray-700 hover:bg-gray-400"
+                                }`}
                                 title={
                                   desk.roomId === 1 && desk.row === 1 && desk.position === 1
                                     ? "Bật/Tắt ESP32 - Tắt: distanceCm=4 (ngưng hoạt động), Bật: distanceCm=30 (có thể cấu hình trong .env)"
@@ -803,19 +723,21 @@ export default function AdminDashboard({ activeTab, setActiveTab }) {
                   <span className="text-sm font-medium text-gray-700">Hiển thị:</span>
                   <button
                     onClick={() => setViewMode("byRoom")}
-                    className={`px-3 py-1 text-sm rounded transition ${viewMode === "byRoom"
+                    className={`px-3 py-1 text-sm rounded transition ${
+                      viewMode === "byRoom"
                         ? "bg-blue-500 text-white"
                         : "bg-gray-200 text-gray-700 hover:bg-gray-300"
-                      }`}
+                    }`}
                   >
                     Theo phòng
                   </button>
                   <button
                     onClick={() => setViewMode("total")}
-                    className={`px-3 py-1 text-sm rounded transition ${viewMode === "total"
+                    className={`px-3 py-1 text-sm rounded transition ${
+                      viewMode === "total"
                         ? "bg-blue-500 text-white"
                         : "bg-gray-200 text-gray-700 hover:bg-gray-300"
-                      }`}
+                    }`}
                   >
                     Tổng hợp
                   </button>
