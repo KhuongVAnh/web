@@ -1,5 +1,4 @@
 import { prisma } from "../index.js"
-import { getDHT } from "../services/dht-cache.js"
 
 /**
  * getDeskSensorData - Lấy dữ liệu sensor mới nhất của một bàn học
@@ -40,7 +39,8 @@ export const getDeskSensorData = async (req, res) => {
     const desk = await prisma.desk.findUnique({
       where: { id: deskId },
       include: {
-        energyRecords: { orderBy: { startTime: "desc" }, take: 10 },
+        sensorReadings: { orderBy: { createdAt: "desc" }, take: 1 },
+        energyRecords: { orderBy: { createdAt: "desc" }, take: 10 },
       },
     })
 
@@ -85,19 +85,12 @@ export const getRoomDHT = async (req, res) => {
   try {
     const roomId = Number.parseInt(req.params.roomId)
     
-    // Get DHT data from cache (only Room 1 has ESP32 data)
-    const dhtData = getDHT(roomId)
-
-    if (!dhtData) {
-      // No data available (not Room 1 or no ESP32 data received yet)
-      return res.json({ temperature: null, humidity: null })
-    }
-
-    res.json({
-      temperature: dhtData.temperature,
-      humidity: dhtData.humidity,
-      timestamp: dhtData.timestamp,
+    const dht = await prisma.dHT.findFirst({
+      where: { roomId },
+      orderBy: { createdAt: "desc" },
     })
+
+    res.json(dht || { temperature: 0, humidity: 0 })
   } catch (error) {
     res.status(500).json({ message: error.message })
   }

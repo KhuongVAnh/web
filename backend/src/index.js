@@ -8,6 +8,7 @@ import roomRoutes from "./routes/rooms.js"
 import adminRoutes from "./routes/admin.js"
 import sensorRoutes from "./routes/sensors.js"
 import { initMqtt } from "./services/mqtt-client.js"
+import { startMockDataService } from "./services/mock-data.js"
 import { initAmqp } from "./services/amqp-client.js"
 import { initMqttAmqpBridge } from "./services/mqtt-amqp-bridge.js"
 import { startDistanceProcessor } from "./workers/distance-processor.js"
@@ -59,6 +60,10 @@ initAmqp()
     // Không exit process, vẫn chạy với MQTT client cũ
   })
 
+// Start mock data service for DHT only (desk occupancy is fixed)
+// Only ESP32 desk (Room 1, Row 1, Table 1) will change via MQTT
+startMockDataService(10000) // Generate DHT data every 10 seconds
+
 // Middleware
 app.use(cors())
 app.use(express.json())
@@ -88,7 +93,6 @@ const PORT = process.env.PORT || 3001
 app.listen(PORT, () => {
   console.log(`🚀 Backend running on http://localhost:${PORT}`)
   console.log(`📡 MQTT: ${process.env.MQTT_BROKER || "Not configured"}`)
-  console.log(`📦 AMQP: ${process.env.RABBITMQ_URL ? "Connected" : "Not configured"}`)
 })
 
 export { app, prisma }

@@ -1,7 +1,5 @@
 import mqtt from "mqtt"
 import { prisma } from "../index.js"
-import { setDeskOccupied, setDeskUnoccupied, isDeskOccupied } from "./desk-state.js"
-import { updateDHT } from "./dht-cache.js"
 
 const MQTT_BROKER = process.env.MQTT_BROKER || "5b91e3ce790f41e78062533f58758704.s1.eu.hivemq.cloud"
 const MQTT_PORT = Number.parseInt(process.env.MQTT_PORT || "8883")
@@ -103,65 +101,91 @@ async function handleSensorData(data) {
       const threshold = esp32Config?.distanceCm || data.meta?.distanceCm || desk.distanceSensitivity || 30
       const isOccupied = threshold > 0 && avgDistance < threshold && avgDistance > 0
 
-      const now = new Date()
-      const wasOccupied = isDeskOccupied(desk.id)
+      // Save sensor reading
+      await prisma.sensorReading.create({
+        data: {
+          deskId: desk.id,
+          distanceCm: avgDistance,
+          occupied: isOccupied,
+        },
+      })
 
-      if (isOccupied && !wasOccupied) {
+      // Update desk occupancy status
+      const now = new Date()
+      
+      if (isOccupied && !desk.occupancyStatus) {
         // Just became occupied
-        setDeskOccupied(desk.id, now)
         await prisma.desk.update({
           where: { id: desk.id },
           data: {
+            occupancyStatus: true,
+            occupancyStartTime: now,
             lightStatus: true, // Auto turn on light
+            lastSensorReading: avgDistance,
+            sensorReadingTime: now,
           },
         })
         console.log(`[MQTT] ✅ Desk ${desk.id} became occupied`)
-      } else if (!isOccupied && wasOccupied) {
+      } else if (!isOccupied && desk.occupancyStatus) {
         // Just became unoccupied
-        const startTime = setDeskUnoccupied(desk.id)
-        if (startTime) {
-          const usageMinutes = Math.floor((now - startTime) / 60000)
-          const minimumDuration = esp32Config?.minimumSessionDurationMinutes || 5
-
-          // Only save if session >= minimum duration
-          if (usageMinutes >= minimumDuration) {
-            const energyWh = (desk.lampPowerW * usageMinutes) / 60
-
-            // Save energy record with startTime and endTime
-            await prisma.energyRecord.create({
-              data: {
-                deskId: desk.id,
-                powerW: desk.lampPowerW,
-                durationMinutes: usageMinutes,
-                energyWh: energyWh,
-                startTime: startTime,
-                endTime: now,
-              },
-            })
-            console.log(`[MQTT] ✅ Desk ${desk.id} became unoccupied (used ${usageMinutes} min, ${energyWh.toFixed(2)} Wh) - Saved`)
-          } else {
-            console.log(`[MQTT] ⚠️ Desk ${desk.id} session too short (${usageMinutes} min < ${minimumDuration} min) - Not saved`)
-          }
+        if (desk.occupancyStartTime) {
+          const usageMinutes = Math.floor((now - desk.occupancyStartTime) / 60000)
+          const totalUsage = desk.totalUsageMinutes + usageMinutes
+          
+          // Calculate energy consumed
+          const energyWh = (desk.lampPowerW * usageMinutes) / 60
+          const totalEnergy = desk.energyConsumedWh + energyWh
+          
+          // Save energy record
+          await prisma.energyRecord.create({
+            data: {
+              deskId: desk.id,
+              powerW: desk.lampPowerW,
+              durationMinutes: usageMinutes,
+              energyWh: energyWh,
+            },
+          })
+          
+          await prisma.desk.update({
+            where: { id: desk.id },
+            data: {
+              occupancyStatus: false,
+              occupancyStartTime: null,
+              lightStatus: false,
+              totalUsageMinutes: totalUsage,
+              energyConsumedWh: totalEnergy,
+              lastSensorReading: avgDistance,
+              sensorReadingTime: now,
+            },
+          })
+          console.log(`[MQTT] ✅ Desk ${desk.id} became unoccupied (used ${usageMinutes} min, ${energyWh.toFixed(2)} Wh)`)
         }
-
+      } else if (isOccupied) {
+        // Still occupied, update sensor reading
         await prisma.desk.update({
           where: { id: desk.id },
           data: {
-            lightStatus: false,
+            lastSensorReading: avgDistance,
+            sensorReadingTime: now,
           },
         })
       }
     }
 
     // Process DHT sensor data (temperature & humidity)
-    // Lưu vào cache thay vì database
     if (data.dht && data.dht.temperature && data.dht.temperature.length > 0) {
       const avgTemp = data.dht.temperature.reduce((a, b) => a + b, 0) / data.dht.temperature.length
       const avgHumidity = data.dht.humidity.reduce((a, b) => a + b, 0) / data.dht.humidity.length
 
-      // Save DHT reading to cache (only Room 1 has ESP32 data)
-      updateDHT(desk.roomId, avgTemp, avgHumidity)
-      console.log(`[MQTT] 📊 Room ${desk.roomId}: ${avgTemp.toFixed(1)}°C, ${avgHumidity.toFixed(1)}% (cached)`)
+      // Save DHT reading for the room
+      await prisma.dHT.create({
+        data: {
+          roomId: desk.roomId,
+          temperature: avgTemp,
+          humidity: avgHumidity,
+        },
+      })
+      console.log(`[MQTT] 📊 Room ${desk.roomId}: ${avgTemp.toFixed(1)}°C, ${avgHumidity.toFixed(1)}%`)
     }
   } catch (error) {
     console.error("[MQTT] ❌ Error handling sensor data:", error)

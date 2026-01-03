@@ -1,6 +1,4 @@
 import { prisma } from "../index.js"
-import { isDeskOccupied } from "../services/desk-state.js"
-import { getDHT } from "../services/dht-cache.js"
 
 /**
  * getAllRooms - Lấy danh sách tất cả các phòng học
@@ -37,43 +35,23 @@ export const getAllRooms = async (req, res) => {
             { position: "asc" },
           ],
         },
+        dhtReadings: {
+          orderBy: { createdAt: "desc" },
+          take: 1,
+        },
       },
       orderBy: { roomNumber: "asc" },
     })
 
-    // Calculate occupancy status for each desk and get DHT data from cache
-    const roomsWithData = await Promise.all(
-      rooms.map(async (room) => {
-        // Get DHT data from cache (only Room 1 has ESP32 data)
-        const dhtData = getDHT(room.id)
-        const currentTemperature = dhtData?.temperature ?? null
-        const currentHumidity = dhtData?.humidity ?? null
-
-        // Calculate occupancy status for each desk from EnergyRecord
-        const desksWithStatus = await Promise.all(
-          room.desks.map(async (desk) => {
-            const latestRecord = await prisma.energyRecord.findFirst({
-              where: { deskId: desk.id },
-              orderBy: { startTime: "desc" },
-            })
-
-            const isOccupied = latestRecord?.endTime === null || isDeskOccupied(desk.id)
-
-            return {
-              ...desk,
-              isOccupied, // Use isOccupied instead of occupancyStatus
-            }
-          })
-        )
-
-        return {
-          ...room,
-          desks: desksWithStatus,
-          currentTemperature,
-          currentHumidity,
-        }
-      })
-    )
+    // Add latest temperature and humidity to each room
+    const roomsWithData = rooms.map((room) => {
+      const latestDHT = room.dhtReadings[0]
+      return {
+        ...room,
+        currentTemperature: latestDHT?.temperature || 22.0,
+        currentHumidity: latestDHT?.humidity || 60.0,
+      }
+    })
 
     res.json(roomsWithData)
   } catch (error) {
@@ -121,6 +99,10 @@ export const getRoomById = async (req, res) => {
             { position: "asc" },
           ],
         },
+        dhtReadings: {
+          orderBy: { createdAt: "desc" },
+          take: 10,
+        },
       },
     })
 
@@ -128,47 +110,18 @@ export const getRoomById = async (req, res) => {
       return res.status(404).json({ message: "Room not found" })
     }
 
-    // Calculate occupancy status for each desk and room statistics
-    const desksWithStatus = await Promise.all(
-      room.desks.map(async (desk) => {
-        const latestRecord = await prisma.energyRecord.findFirst({
-          where: { deskId: desk.id },
-          orderBy: { startTime: "desc" },
-        })
-
-        const isOccupied = latestRecord?.endTime === null || isDeskOccupied(desk.id)
-
-        return {
-          ...desk,
-          isOccupied, // Use isOccupied instead of occupancyStatus
-        }
-      })
-    )
-
-    const occupiedDesks = desksWithStatus.filter((d) => d.isOccupied).length
-
-    // Calculate total energy from EnergyRecord (all time)
-    const allEnergyRecords = await prisma.energyRecord.findMany({
-      where: {
-        deskId: { in: room.desks.map((d) => d.id) },
-      },
-      select: { energyWh: true },
-    })
-    const totalEnergy = allEnergyRecords.reduce((sum, r) => sum + r.energyWh, 0)
-
-    // Get DHT data from cache (only Room 1 has ESP32 data)
-    const dhtData = getDHT(room.id)
-    const currentTemperature = dhtData?.temperature ?? null
-    const currentHumidity = dhtData?.humidity ?? null
+    // Calculate room statistics
+    const occupiedDesks = room.desks.filter((d) => d.occupancyStatus).length
+    const totalEnergy = room.desks.reduce((sum, d) => sum + d.energyConsumedWh, 0)
+    const latestDHT = room.dhtReadings[0]
 
     res.json({
       ...room,
-      desks: desksWithStatus,
       occupiedDesks,
       totalDesks: room.desks.length,
       totalEnergyWh: totalEnergy,
-      currentTemperature,
-      currentHumidity,
+      currentTemperature: latestDHT?.temperature || 22.0,
+      currentHumidity: latestDHT?.humidity || 60.0,
     })
   } catch (error) {
     res.status(500).json({ message: error.message })
@@ -200,23 +153,15 @@ export const getRoomById = async (req, res) => {
 export const getRoomTemperature = async (req, res) => {
   try {
     const roomId = Number.parseInt(req.params.id)
-    
-    // Get DHT data from cache (only Room 1 has ESP32 data)
-    const dhtData = getDHT(roomId)
-
-    if (!dhtData) {
-      // No data available (not Room 1 or no ESP32 data received yet)
-      return res.json({
-        temperature: null,
-        humidity: null,
-        timestamp: null,
-      })
-    }
+    const dht = await prisma.dHT.findFirst({
+      where: { roomId },
+      orderBy: { createdAt: "desc" },
+    })
 
     res.json({
-      temperature: dhtData.temperature,
-      humidity: dhtData.humidity,
-      timestamp: dhtData.timestamp,
+      temperature: dht?.temperature || 22.0,
+      humidity: dht?.humidity || 60.0,
+      timestamp: dht?.createdAt || new Date(),
     })
   } catch (error) {
     res.status(500).json({ message: error.message })

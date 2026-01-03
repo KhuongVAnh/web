@@ -1,6 +1,5 @@
 import { prisma } from "../index.js"
 import { publishConfig } from "../services/mqtt-client.js"
-import { isDeskOccupied, getDeskState, setDeskUnoccupied } from "../services/desk-state.js"
 import dotenv from "dotenv"
 
 dotenv.config()
@@ -46,26 +45,7 @@ export const getAllDesks = async (req, res) => {
         { position: "asc" },
       ],
     })
-
-    // Calculate occupancy status real-time from EnergyRecord
-    // A desk is occupied if it has an EnergyRecord with endTime = null
-    const desksWithStatus = await Promise.all(
-      desks.map(async (desk) => {
-        const latestRecord = await prisma.energyRecord.findFirst({
-          where: { deskId: desk.id },
-          orderBy: { startTime: "desc" },
-        })
-
-        const isOccupied = latestRecord?.endTime === null || isDeskOccupied(desk.id)
-
-        return {
-          ...desk,
-          isOccupied, // Use isOccupied instead of occupancyStatus
-        }
-      })
-    )
-
-    res.json(desksWithStatus)
+    res.json(desks)
   } catch (error) {
     res.status(500).json({ message: error.message })
   }
@@ -105,7 +85,8 @@ export const getDeskById = async (req, res) => {
       where: { id: Number.parseInt(req.params.id) },
       include: {
         room: true,
-        energyRecords: { orderBy: { startTime: "desc" }, take: 10 },
+        sensorReadings: { orderBy: { createdAt: "desc" }, take: 10 },
+        energyRecords: { orderBy: { createdAt: "desc" }, take: 10 },
       },
     })
 
@@ -113,31 +94,14 @@ export const getDeskById = async (req, res) => {
       return res.status(404).json({ message: "Desk not found" })
     }
 
-    // Calculate occupancy status and current usage time from EnergyRecord
-    const latestRecord = await prisma.energyRecord.findFirst({
-      where: { deskId: desk.id },
-      orderBy: { startTime: "desc" },
-    })
-
-    const isOccupied = latestRecord?.endTime === null || isDeskOccupied(desk.id)
+    // Calculate current usage time if occupied
     let currentUsageMinutes = 0
-
-    if (isOccupied) {
-      if (latestRecord?.endTime === null && latestRecord?.startTime) {
-        // Calculate from EnergyRecord
-        currentUsageMinutes = Math.floor((new Date() - latestRecord.startTime) / 60000)
-      } else {
-        // Calculate from in-memory state
-        const state = getDeskState(desk.id)
-        if (state?.startTime) {
-          currentUsageMinutes = Math.floor((new Date() - state.startTime) / 60000)
-        }
-      }
+    if (desk.occupancyStatus && desk.occupancyStartTime) {
+      currentUsageMinutes = Math.floor((new Date() - desk.occupancyStartTime) / 60000)
     }
 
     res.json({
       ...desk,
-      isOccupied, // Use isOccupied instead of occupancyStatus
       currentUsageMinutes,
     })
   } catch (error) {
@@ -192,70 +156,30 @@ export const toggleLight = async (req, res) => {
     // If this is ESP32 desk, also update occupancy and send MQTT config
     if (isESP32Desk) {
       if (!newLightStatus) {
-        // Tắt bàn: distanceCm = ESP32_DISABLE_DISTANCE_CM (tắt hoạt động phần cứng)
-        // End current session if exists
-        const now = new Date()
+        // Tắt bàn: set occupancy = false, distanceCm = ESP32_DISABLE_DISTANCE_CM (tắt hoạt động phần cứng)
+        updateData.occupancyStatus = false
+        updateData.occupancyStartTime = null
         
-        // Check if there's an active session (from EnergyRecord or in-memory state)
-        const latestRecord = await prisma.energyRecord.findFirst({
-          where: { deskId: desk.id },
-          orderBy: { startTime: "desc" },
-        })
+        // Calculate energy if was occupied
+        if (desk.occupancyStatus && desk.occupancyStartTime) {
+          const now = new Date()
+          const usageMinutes = Math.floor((now - desk.occupancyStartTime) / 60000)
+          const totalUsage = desk.totalUsageMinutes + usageMinutes
+          const energyWh = (desk.lampPowerW * usageMinutes) / 60
+          const totalEnergy = desk.energyConsumedWh + energyWh
 
-        const hasActiveSession = latestRecord?.endTime === null || isDeskOccupied(desk.id)
+          // Save energy record
+          await prisma.energyRecord.create({
+            data: {
+              deskId: desk.id,
+              powerW: desk.lampPowerW,
+              durationMinutes: usageMinutes,
+              energyWh: energyWh,
+            },
+          })
 
-        if (hasActiveSession) {
-          let startTime = null
-          
-          // Get start time from EnergyRecord or in-memory state
-          if (latestRecord?.endTime === null && latestRecord?.startTime) {
-            startTime = latestRecord.startTime
-          } else {
-            const state = getDeskState(desk.id)
-            if (state?.startTime) {
-              startTime = state.startTime
-            }
-          }
-
-          if (startTime) {
-            const usageMinutes = Math.floor((now - startTime) / 60000)
-            const deviceId = desk.esp32DeviceId || `ESP32-${desk.id}`
-            const esp32Config = await prisma.eSP32Config.findFirst({
-              where: { deviceId },
-            })
-            const minimumDuration = esp32Config?.minimumSessionDurationMinutes || 5
-
-            // Only save if session >= minimum duration
-            if (usageMinutes >= minimumDuration) {
-              const energyWh = (desk.lampPowerW * usageMinutes) / 60
-
-              // Update existing record or create new one
-              if (latestRecord?.endTime === null) {
-                await prisma.energyRecord.update({
-                  where: { id: latestRecord.id },
-                  data: {
-                    endTime: now,
-                    durationMinutes: usageMinutes,
-                    energyWh: energyWh,
-                  },
-                })
-              } else {
-                await prisma.energyRecord.create({
-                  data: {
-                    deskId: desk.id,
-                    powerW: desk.lampPowerW,
-                    durationMinutes: usageMinutes,
-                    energyWh: energyWh,
-                    startTime: startTime,
-                    endTime: now,
-                  },
-                })
-              }
-            }
-
-            // Clear in-memory state
-            setDeskUnoccupied(desk.id)
-          }
+          updateData.totalUsageMinutes = totalUsage
+          updateData.energyConsumedWh = totalEnergy
         }
 
         // Send MQTT config to turn off hardware (distanceCm = 4)
@@ -351,6 +275,7 @@ export const toggleLight = async (req, res) => {
 
     if (isESP32Desk) {
       console.log(`[Toggle Light] ${newLightStatus ? "✅ BẬT" : "❌ TẮT"} ESP32 bàn ${desk.row}-${desk.position}`)
+      console.log(`[Toggle Light]   - occupancyStatus: ${updateData.occupancyStatus !== undefined ? updateData.occupancyStatus : desk.occupancyStatus}`)
       console.log(`[Toggle Light]   - lightStatus: ${newLightStatus}`)
       console.log(`[Toggle Light]   - distanceCm: ${updateData.distanceSensitivity !== undefined ? updateData.distanceSensitivity : desk.distanceSensitivity}`)
     } else {
@@ -458,7 +383,7 @@ export const getDeskEnergy = async (req, res) => {
       where: { id: Number.parseInt(req.params.id) },
       include: {
         energyRecords: {
-          orderBy: { startTime: "desc" },
+          orderBy: { createdAt: "desc" },
           take: 100,
         },
       },
@@ -468,13 +393,9 @@ export const getDeskEnergy = async (req, res) => {
       return res.status(404).json({ message: "Desk not found" })
     }
 
-    // Tính toán tổng từ energyRecords
-    const totalEnergyWh = desk.energyRecords.reduce((sum, record) => sum + record.energyWh, 0)
-    const totalUsageMinutes = desk.energyRecords.reduce((sum, record) => sum + record.durationMinutes, 0)
-
     res.json({
-      totalEnergyWh,
-      totalUsageMinutes,
+      totalEnergyWh: desk.energyConsumedWh,
+      totalUsageMinutes: desk.totalUsageMinutes,
       records: desk.energyRecords,
     })
   } catch (error) {

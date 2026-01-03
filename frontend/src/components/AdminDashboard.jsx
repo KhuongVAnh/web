@@ -253,7 +253,7 @@ export default function AdminDashboard({ activeTab, setActiveTab }) {
   const desksByRow = organizeDesksByRow(selectedRoom?.desks || [])
 
   const getUsageTime = (desk) => {
-    if (!desk.isOccupied) return 0
+    if (!desk.occupancyStatus || !desk.occupancyStartTime) return 0
     const startTime = new Date(desk.occupancyStartTime)
     const now = new Date()
     return Math.floor((now - startTime) / 60000)
@@ -345,15 +345,10 @@ export default function AdminDashboard({ activeTab, setActiveTab }) {
                   <Thermometer className="w-6 h-6 text-red-600" />
                 </div>
                 <p className="text-4xl font-bold text-gray-900">
-                  {(() => {
-                    const validTemps = rooms
-                      .map((r) => r.currentTemperature)
-                      .filter((t) => t !== null && t !== undefined)
-                    return validTemps.length > 0
-                      ? (validTemps.reduce((sum, t) => sum + t, 0) / validTemps.length).toFixed(1)
-                      : "NA"
-                  })()}
-                  {rooms.some((r) => r.currentTemperature !== null && r.currentTemperature !== undefined) && "°C"}
+                  {(
+                    rooms.reduce((sum, r) => sum + (r.currentTemperature || 22.0), 0) / rooms.length
+                  ).toFixed(1)}
+                  °C
                 </p>
                 <p className="text-xs text-gray-600 mt-2">Trung bình tất cả các phòng</p>
               </div>
@@ -364,15 +359,10 @@ export default function AdminDashboard({ activeTab, setActiveTab }) {
                   <Droplets className="w-6 h-6 text-blue-600" />
                 </div>
                 <p className="text-4xl font-bold text-gray-900">
-                  {(() => {
-                    const validHumidities = rooms
-                      .map((r) => r.currentHumidity)
-                      .filter((h) => h !== null && h !== undefined)
-                    return validHumidities.length > 0
-                      ? (validHumidities.reduce((sum, h) => sum + h, 0) / validHumidities.length).toFixed(1)
-                      : "NA"
-                  })()}
-                  {rooms.some((r) => r.currentHumidity !== null && r.currentHumidity !== undefined) && "%"}
+                  {(
+                    rooms.reduce((sum, r) => sum + (r.currentHumidity || 60.0), 0) / rooms.length
+                  ).toFixed(1)}
+                  %
                 </p>
                 <p className="text-xs text-gray-600 mt-2">Trung bình tất cả các phòng</p>
               </div>
@@ -384,7 +374,7 @@ export default function AdminDashboard({ activeTab, setActiveTab }) {
             <h3 className="text-lg font-bold text-gray-900 mb-4">Tổng Quan Phòng Học</h3>
             <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
               {rooms.map((room) => {
-                const occupied = room.desks?.filter((d) => d.isOccupied).length || 0
+                const occupied = room.desks?.filter((d) => d.occupancyStatus).length || 0
                 const total = room.desks?.length || 0
                 const energy = room.desks?.reduce((sum, d) => sum + d.energyConsumedWh, 0) || 0
                 return (
@@ -406,9 +396,7 @@ export default function AdminDashboard({ activeTab, setActiveTab }) {
                             <span>Nhiệt độ:</span>
                           </div>
                           <span className="font-semibold text-red-600">
-                            {room.currentTemperature !== null && room.currentTemperature !== undefined
-                              ? `${room.currentTemperature.toFixed(1)}°C`
-                              : "NA"}
+                            {room.currentTemperature?.toFixed(1) || "22.0"}°C
                           </span>
                         </div>
                         <div className="flex items-center justify-between">
@@ -417,9 +405,7 @@ export default function AdminDashboard({ activeTab, setActiveTab }) {
                             <span>Độ ẩm:</span>
                           </div>
                           <span className="font-semibold text-blue-600">
-                            {room.currentHumidity !== null && room.currentHumidity !== undefined
-                              ? `${room.currentHumidity.toFixed(1)}%`
-                              : "NA"}
+                            {room.currentHumidity?.toFixed(1) || "60.0"}%
                           </span>
                         </div>
                       </div>
@@ -439,7 +425,7 @@ export default function AdminDashboard({ activeTab, setActiveTab }) {
             <h3 className="text-lg font-bold text-gray-900 mb-4">Xem phòng</h3>
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2">
               {rooms.map((room) => {
-                const occupied = room.desks?.filter((d) => d.isOccupied).length || 0
+                const occupied = room.desks?.filter((d) => d.occupancyStatus).length || 0
                 const total = room.desks?.length || 0
                 return (
                   <button
@@ -472,9 +458,7 @@ export default function AdminDashboard({ activeTab, setActiveTab }) {
                     <Thermometer className="w-5 h-5 text-red-600" />
                   </div>
                   <p className="text-3xl font-bold text-gray-900">
-                    {selectedRoom.currentTemperature !== null && selectedRoom.currentTemperature !== undefined
-                      ? `${selectedRoom.currentTemperature.toFixed(1)}°C`
-                      : "NA"}
+                    {selectedRoom.currentTemperature?.toFixed(1) || "22.0"}°C
                   </p>
                   <p className="text-xs text-gray-600 mt-1">Điều kiện phòng hiện tại</p>
                 </div>
@@ -485,9 +469,7 @@ export default function AdminDashboard({ activeTab, setActiveTab }) {
                     <Droplets className="w-5 h-5 text-blue-600" />
                   </div>
                   <p className="text-3xl font-bold text-gray-900">
-                    {selectedRoom.currentHumidity !== null && selectedRoom.currentHumidity !== undefined
-                      ? `${selectedRoom.currentHumidity.toFixed(1)}%`
-                      : "NA"}
+                    {selectedRoom.currentHumidity?.toFixed(1) || "60.0"}%
                   </p>
                   <p className="text-xs text-gray-600 mt-1">Độ ẩm không khí hiện tại</p>
                 </div>
@@ -503,7 +485,7 @@ export default function AdminDashboard({ activeTab, setActiveTab }) {
                         return (
                           <div
                             key={desk.id}
-                            className={`p-3 rounded-lg border-2 transition ${desk.isOccupied
+                            className={`p-3 rounded-lg border-2 transition ${desk.occupancyStatus
                                 ? "bg-red-50 border-red-300"
                                 : "bg-green-50 border-green-300"
                               }`}
@@ -517,7 +499,7 @@ export default function AdminDashboard({ activeTab, setActiveTab }) {
                               )}
                             </div>
 
-                            {desk.isOccupied && (
+                            {desk.occupancyStatus && (
                               <div className="flex items-center gap-1 text-xs text-red-700 mb-1">
                                 <User className="w-3 h-3" />
                                 <span>Đang dùng</span>

@@ -1,6 +1,5 @@
 import { prisma } from "../index.js"
 import { publishConfig } from "../services/mqtt-client.js"
-import { isDeskOccupied } from "../services/desk-state.js"
 import dotenv from "dotenv"
 
 dotenv.config()
@@ -33,28 +32,14 @@ const ESP32_DISABLE_DISTANCE_CM = Number.parseFloat(process.env.ESP32_DISABLE_DI
 export const getStats = async (req, res) => {
   try {
     const totalDesks = await prisma.desk.count()
+    const occupiedDesks = await prisma.desk.count({ where: { occupancyStatus: true } })
     const totalRooms = await prisma.studyRoom.count()
 
-    // Count occupied desks from EnergyRecord (endTime = null) or in-memory state
-    const allDesks = await prisma.desk.findMany({ select: { id: true } })
-    let occupiedDesks = 0
-
-    for (const desk of allDesks) {
-      const latestRecord = await prisma.energyRecord.findFirst({
-        where: { deskId: desk.id },
-        orderBy: { startTime: "desc" },
-      })
-
-      if (latestRecord?.endTime === null || isDeskOccupied(desk.id)) {
-        occupiedDesks++
-      }
-    }
-
-    // Calculate total energy from EnergyRecord (all time)
-    const allEnergyRecords = await prisma.energyRecord.findMany({
-      select: { energyWh: true },
+    const desks = await prisma.desk.findMany({
+      select: { energyConsumedWh: true },
     })
-    const totalEnergy = allEnergyRecords.reduce((sum, r) => sum + r.energyWh, 0)
+
+    const totalEnergy = desks.reduce((sum, d) => sum + d.energyConsumedWh, 0)
 
     res.json({
       totalDesks,
@@ -114,6 +99,8 @@ export const getEnergyReport = async (req, res) => {
             id: true,
             row: true,
             position: true,
+            energyConsumedWh: true,
+            totalUsageMinutes: true,
             lampPowerW: true,
           },
         },
@@ -121,46 +108,26 @@ export const getEnergyReport = async (req, res) => {
       orderBy: { roomNumber: "asc" },
     })
 
-    // Calculate energy from EnergyRecord for each room and desk
-    const report = await Promise.all(
-      rooms.map(async (room) => {
-        let roomEnergy = 0
-        let roomUsage = 0
-
-        const desksWithEnergy = await Promise.all(
-          room.desks.map(async (desk) => {
-            // Get all energy records for this desk
-            const energyRecords = await prisma.energyRecord.findMany({
-              where: { deskId: desk.id },
-            })
-
-            const deskEnergy = energyRecords.reduce((sum, r) => sum + r.energyWh, 0)
-            const deskUsage = energyRecords.reduce((sum, r) => sum + r.durationMinutes, 0)
-
-            roomEnergy += deskEnergy
-            roomUsage += deskUsage
-
-            return {
-              id: desk.id,
-              row: desk.row,
-              position: desk.position,
-              energyWh: deskEnergy,
-              usageMinutes: deskUsage,
-              lampPowerW: desk.lampPowerW,
-            }
-          })
-        )
-
-        return {
-          roomId: room.id,
-          roomNumber: room.roomNumber,
-          roomName: room.name,
-          totalEnergyWh: roomEnergy,
-          totalUsageMinutes: roomUsage,
-          desks: desksWithEnergy,
-        }
-      })
-    )
+    const report = rooms.map((room) => {
+      const roomEnergy = room.desks.reduce((sum, d) => sum + d.energyConsumedWh, 0)
+      const roomUsage = room.desks.reduce((sum, d) => sum + d.totalUsageMinutes, 0)
+      
+      return {
+        roomId: room.id,
+        roomNumber: room.roomNumber,
+        roomName: room.name,
+        totalEnergyWh: roomEnergy,
+        totalUsageMinutes: roomUsage,
+        desks: room.desks.map((desk) => ({
+          id: desk.id,
+          row: desk.row,
+          position: desk.position,
+          energyWh: desk.energyConsumedWh,
+          usageMinutes: desk.totalUsageMinutes,
+          lampPowerW: desk.lampPowerW,
+        })),
+      }
+    })
 
     res.json(report)
   } catch (error) {
@@ -213,7 +180,7 @@ export const getEnergyReport = async (req, res) => {
  */
 export const updateESP32Config = async (req, res) => {
   try {
-    const { fs1, fs2, fs3, distanceCm, duration, minimumSessionDurationMinutes } = req.body
+    const { fs1, fs2, fs3, distanceCm, duration } = req.body
 
     // Find ESP32 desk (table 1 of room 1)
     const esp32Desk = await prisma.desk.findFirst({
@@ -234,12 +201,11 @@ export const updateESP32Config = async (req, res) => {
     const config = await prisma.eSP32Config.upsert({
       where: { deviceId },
       update: {
-        fs1: fs1 !== undefined ? fs1 : 3,
-        fs2: fs2 !== undefined ? fs2 : 2,
-        fs3: fs3 !== undefined ? fs3 : 1,
-        distanceCm: distanceCm !== undefined ? distanceCm : 30,
-        duration: duration !== undefined ? duration : 4000,
-        minimumSessionDurationMinutes: minimumSessionDurationMinutes !== undefined ? minimumSessionDurationMinutes : 5,
+        fs1: fs1 || 3,
+        fs2: fs2 || 2,
+        fs3: fs3 || 1,
+        distanceCm: distanceCm || 30,
+        duration: duration || 4000,
         lastSync: new Date(),
       },
       create: {
@@ -249,7 +215,6 @@ export const updateESP32Config = async (req, res) => {
         fs3: fs3 || 1,
         distanceCm: distanceCm || 30,
         duration: duration || 4000,
-        minimumSessionDurationMinutes: minimumSessionDurationMinutes || 5,
         lastSync: new Date(),
       },
     })
@@ -260,9 +225,11 @@ export const updateESP32Config = async (req, res) => {
         where: { id: esp32Desk.id },
         data: { 
           distanceSensitivity: distanceCm,
-          // If setting to ESP32_DISABLE_DISTANCE_CM (disabled), also turn off light
+          // If setting to ESP32_DISABLE_DISTANCE_CM (disabled), also turn off light and occupancy
           ...(distanceCm === ESP32_DISABLE_DISTANCE_CM ? {
             lightStatus: false,
+            occupancyStatus: false,
+            occupancyStartTime: null,
           } : {}),
         },
       })
@@ -552,14 +519,13 @@ export const getMonthlyEnergyReport = async (req, res) => {
     // Get month range
     const { startDate, endDate } = getMonthRange(selectedMonth, selectedYear)
 
-    // Query energy records for selected month (based on startTime)
+    // Query energy records for selected month
     const energyRecords = await prisma.energyRecord.findMany({
       where: {
-        startTime: {
+        createdAt: {
           gte: startDate,
           lte: endDate,
         },
-        endTime: { not: null }, // Only completed sessions
       },
       include: {
         desk: {
@@ -585,11 +551,10 @@ export const getMonthlyEnergyReport = async (req, res) => {
               const { startDate: cs, endDate: ce } = getMonthRange(cm, cy)
               const compareRecords = await prisma.energyRecord.findMany({
                 where: {
-                  startTime: {
+                  createdAt: {
                     gte: cs,
                     lte: ce,
                   },
-                  endTime: { not: null }, // Only completed sessions
                 },
               })
               const compareData = await aggregateEnergyByRoom(compareRecords, cm, cy)
