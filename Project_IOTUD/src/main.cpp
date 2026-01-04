@@ -16,8 +16,8 @@ const char *MQTT_BROKER = "5b91e3ce790f41e78062533f58758704.s1.eu.hivemq.cloud";
 const int MQTT_PORT = 8883;
 const char *MQTT_USERNAME = "ESP32";
 const char *MQTT_PASSWORD = "Vanh080105";
-const char *MQTT_TOPIC_DATA = "esp32/data";
-const char *MQTT_TOPIC_CONFIG = "esp32/config";
+const char *MQTT_TOPIC_DATA = "esp32/212/data";
+const char *MQTT_TOPIC_CONFIG = "esp32/212/config";
 
 // WiFi + MQTT Client
 WiFiClientSecure espClient;
@@ -47,9 +47,9 @@ volatile float fs1 = 3;                               // Tần số lấy mẫu 
 volatile float fs2 = 2;                               // Tần số lấy mẫu BH1750 (Hz)
 volatile float fs3 = 1;                               // Tần số lấy mẫu DHT (Hz) - TỐI ĐA 2.5 Hz
 volatile int distanceCm = 30;                         // Ngưỡng khoảng cách (cm)
-volatile int room = 1;                                // Định danh phòng - có thể điều chỉnh qua MQTT
+volatile int room = 2;                                // Định danh phòng - có thể điều chỉnh qua MQTT
 volatile int row = 1;                                 // Định danh hàng - có thể điều chỉnh qua MQTT
-volatile int table = 1;                               // Định danh bàn - có thể điều chỉnh qua MQTT
+volatile int table = 2;                               // Định danh bàn - có thể điều chỉnh qua MQTT
 
 // ========== Mảng dữ liệu đơn giản ==========
 float *distanceArray = nullptr;

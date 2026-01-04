@@ -5,8 +5,9 @@ const MQTT_BROKER = process.env.MQTT_BROKER || "5b91e3ce790f41e78062533f58758704
 const MQTT_PORT = Number.parseInt(process.env.MQTT_PORT || "8883")
 const MQTT_USERNAME = process.env.MQTT_USERNAME || "ESP32"
 const MQTT_PASSWORD = process.env.MQTT_PASSWORD || "Vanh080105"
-const MQTT_TOPIC_DATA = process.env.MQTT_TOPIC_DATA || "esp32/data"
-const MQTT_TOPIC_CONFIG = process.env.MQTT_TOPIC_CONFIG || "esp32/config"
+// Topic dạng esp32/abc/data (a=room, b=row, c=table) và esp32/abc/config
+const MQTT_TOPIC_DATA_PATTERN = process.env.MQTT_TOPIC_DATA_PATTERN || "esp32/+/data"
+const MQTT_TOPIC_CONFIG_PREFIX = process.env.MQTT_TOPIC_CONFIG_PREFIX || "esp32"
 const ESP32_DISABLE_DISTANCE_CM = Number.parseFloat(process.env.ESP32_DISABLE_DISTANCE_CM || "4")
 
 let mqttClient = null
@@ -23,12 +24,12 @@ export async function initMqtt() {
     })
 
     client.on("connect", () => {
-      console.log("[MQTT] ✅ Connected to broker")
-      client.subscribe([MQTT_TOPIC_DATA, MQTT_TOPIC_CONFIG], (err) => {
+      console.log("[MQTT] Connected to broker")
+      client.subscribe(MQTT_TOPIC_DATA_PATTERN, { qos: 1 }, (err) => {
         if (err) {
-          console.error("[MQTT] ❌ Subscribe error:", err)
+          console.error("[MQTT] Subscribe error:", err)
         } else {
-          console.log(`[MQTT] 📡 Subscribed to ${MQTT_TOPIC_DATA} and ${MQTT_TOPIC_CONFIG}`)
+          console.log(`[MQTT] Subscribed to data topics: ${MQTT_TOPIC_DATA_PATTERN}`)
         }
       })
       mqttClient = client
@@ -37,145 +38,143 @@ export async function initMqtt() {
 
     client.on("message", async (topic, message) => {
       try {
-        if (topic === MQTT_TOPIC_DATA) {
-          const data = JSON.parse(message.toString())
-          await handleSensorData(data)
-        }
+        const data = JSON.parse(message.toString())
+        await handleSensorData(topic, data)
       } catch (error) {
-        console.error("[MQTT] ❌ Error processing message:", error)
+        console.error("[MQTT] Error processing message:", error)
       }
     })
 
     client.on("error", (error) => {
-      console.error("[MQTT] ❌ Connection error:", error)
+      console.error("[MQTT] Connection error:", error)
       reject(error)
     })
 
     client.on("close", () => {
-      console.log("[MQTT] ⚠️ Connection closed")
+      console.log("[MQTT] Connection closed")
     })
 
     client.on("reconnect", () => {
-      console.log("[MQTT] 🔄 Reconnecting...")
+      console.log("[MQTT] Reconnecting...")
     })
   })
 }
 
-async function handleSensorData(data) {
-  try {
-    // Extract location from meta data (room, row, table)
-    const meta = data.meta || {}
-    const roomNumber = meta.room
-    const row = meta.row
-    const table = meta.table
+function parseLocationFromTopic(topic) {
+  // topic = esp32/abc/data (a=room, b=row, c=table)
+  const match = topic.match(/^esp32\/(\d+)\/data$/)
+  if (!match) return null
+  const code = match[1]
+  if (code.length < 3) return null
+  const room = Number.parseInt(code[0])
+  const row = Number.parseInt(code[1])
+  const table = Number.parseInt(code[2])
+  if (Number.isNaN(room) || Number.isNaN(row) || Number.isNaN(table)) return null
+  return { room, row, table }
+}
 
-    // Validate location data
+async function handleSensorData(topic, data) {
+  try {
+    const topicLocation = parseLocationFromTopic(topic)
+    const meta = data.meta || {}
+
+    // Ưu tiên lấy từ topic; fallback meta để tương thích cũ
+    const roomNumber = topicLocation?.room ?? meta.room
+    const row = topicLocation?.row ?? meta.row
+    const table = topicLocation?.table ?? meta.table
+
     if (!roomNumber || !row || !table) {
-      console.error("[MQTT] ❌ Missing location data in meta: room, row, table required")
-      console.error("[MQTT] Received meta:", meta)
+      console.error("[MQTT] Missing location: room, row, table required", { meta, topic })
       return
     }
 
-    // Find the room by roomNumber
     const room = await prisma.studyRoom.findFirst({
       where: { roomNumber: Number.parseInt(roomNumber) },
     })
-
     if (!room) {
-      console.error(`[MQTT] ❌ Room ${roomNumber} not found`)
+      console.error(`[MQTT] Room ${roomNumber} not found`)
       return
     }
 
-    // Find the desk by location (roomId, row, position)
     const desk = await prisma.desk.findFirst({
       where: {
         roomId: room.id,
         row: Number.parseInt(row),
-        position: Number.parseInt(table), // position in schema = table in ESP32
+        position: Number.parseInt(table),
       },
     })
 
     if (!desk) {
-      console.error(`[MQTT] ❌ Desk not found: Room ${roomNumber}, Row ${row}, Table ${table}`)
+      console.error(`[MQTT] Desk not found: Room ${roomNumber}, Row ${row}, Table ${table}`)
       return
     }
 
-    console.log(`[MQTT] 📡 Received data for ESP32 at Room ${roomNumber}, Row ${row}, Table ${table} (Desk ID: ${desk.id})`)
+    console.log(`[MQTT] Data for Desk ${desk.id} (room ${roomNumber}, row ${row}, table ${table})`)
 
-    // Process distance sensor data
+    // Distance data
     if (data.distance && data.distance.data && data.distance.data.length > 0) {
       const distanceReadings = data.distance.data
-      // Lấy giá trị cuối cùng của mảng thay vì tính trung bình
       const lastDistance = distanceReadings[distanceReadings.length - 1]
-      
-      // Get current ESP32 config to check if hardware is disabled
+
       const deviceId = desk.esp32DeviceId || `ESP32-${desk.id}`
-      const esp32Config = await prisma.eSP32Config.findFirst({
-        where: { deviceId },
-      })
-      
-      // If hardware is disabled (distanceCm = ESP32_DISABLE_DISTANCE_CM), don't process sensor data
+      const esp32Config = await prisma.eSP32Config.findFirst({ where: { deviceId } })
+
       if (esp32Config && esp32Config.distanceCm === ESP32_DISABLE_DISTANCE_CM) {
-        console.log(`[MQTT] ⚠️  ESP32 desk is disabled (distanceCm = ${ESP32_DISABLE_DISTANCE_CM}), ignoring sensor data`)
+        console.log(`[MQTT] Desk ${desk.id} disabled (distanceCm=${ESP32_DISABLE_DISTANCE_CM}), skip`)
         return
       }
-      
-      // Check if occupied based on threshold
-      // Priority: ESP32 config > meta data > desk sensitivity > default 30
+
       const threshold = esp32Config?.distanceCm || data.meta?.distanceCm || desk.distanceSensitivity || 30
       const isOccupied = threshold > 0 && lastDistance < threshold && lastDistance > 0
 
-      // Save sensor reading with location info
+      const roomNum = Number.parseInt(roomNumber)
+      const rowNum = Number.parseInt(row)
+      const tableNum = Number.parseInt(table)
+
       await prisma.sensorReading.create({
         data: {
           deskId: desk.id,
           distanceCm: lastDistance,
           occupied: isOccupied,
-          room: roomNumber,
-          row: Number.parseInt(row),
-          table: Number.parseInt(table),
+          room: roomNum,
+          row: rowNum,
+          table: tableNum,
         },
       })
 
-      // Update desk occupancy status
       const now = new Date()
-      
+
       if (isOccupied && !desk.occupancyStatus) {
-        // Just became occupied
         await prisma.desk.update({
           where: { id: desk.id },
           data: {
             occupancyStatus: true,
             occupancyStartTime: now,
-            lightStatus: true, // Auto turn on light
+            lightStatus: true,
             lastSensorReading: lastDistance,
             sensorReadingTime: now,
           },
         })
-        console.log(`[MQTT] ✅ Desk ${desk.id} became occupied`)
+        console.log(`[MQTT] Desk ${desk.id} became occupied`)
       } else if (!isOccupied && desk.occupancyStatus) {
-        // Just became unoccupied
         if (desk.occupancyStartTime) {
           const usageMinutes = Math.floor((now - desk.occupancyStartTime) / 60000)
           const totalUsage = desk.totalUsageMinutes + usageMinutes
-          
-          // Calculate energy consumed
           const energyWh = (desk.lampPowerW * usageMinutes) / 60
           const totalEnergy = desk.energyConsumedWh + energyWh
-          
-          // Save energy record with location info
+
           await prisma.energyRecord.create({
             data: {
               deskId: desk.id,
               powerW: desk.lampPowerW,
               durationMinutes: usageMinutes,
               energyWh: energyWh,
-              room: roomNumber,
-              row: Number.parseInt(row),
-              table: Number.parseInt(table),
+              room: roomNum,
+              row: rowNum,
+              table: tableNum,
             },
           })
-          
+
           await prisma.desk.update({
             where: { id: desk.id },
             data: {
@@ -188,10 +187,9 @@ async function handleSensorData(data) {
               sensorReadingTime: now,
             },
           })
-          console.log(`[MQTT] ✅ Desk ${desk.id} became unoccupied (used ${usageMinutes} min, ${energyWh.toFixed(2)} Wh)`)
+          console.log(`[MQTT] Desk ${desk.id} became unoccupied (used ${usageMinutes} min, ${energyWh.toFixed(2)} Wh)`)
         }
       } else if (isOccupied) {
-        // Still occupied, update sensor reading
         await prisma.desk.update({
           where: { id: desk.id },
           data: {
@@ -202,13 +200,11 @@ async function handleSensorData(data) {
       }
     }
 
-    // Process DHT sensor data (temperature & humidity)
+    // DHT data
     if (data.dht && data.dht.temperature && data.dht.temperature.length > 0) {
-      // Lấy giá trị cuối cùng của mảng thay vì tính trung bình
       const lastTemp = data.dht.temperature[data.dht.temperature.length - 1]
       const lastHumidity = data.dht.humidity[data.dht.humidity.length - 1]
 
-      // Save DHT reading for the room (use room from meta, not desk.roomId)
       await prisma.dHT.create({
         data: {
           roomId: room.id,
@@ -216,10 +212,10 @@ async function handleSensorData(data) {
           humidity: lastHumidity,
         },
       })
-      console.log(`[MQTT] 📊 Room ${roomNumber}: ${lastTemp.toFixed(1)}°C, ${lastHumidity.toFixed(1)}%`)
+      console.log(`[MQTT] Room ${roomNumber}: ${lastTemp.toFixed(1)} C, ${lastHumidity.toFixed(1)}%`)
     }
   } catch (error) {
-    console.error("[MQTT] ❌ Error handling sensor data:", error)
+    console.error("[MQTT] Error handling sensor data:", error)
   }
 }
 
@@ -236,32 +232,32 @@ export async function publishConfig(config) {
     duration: config.duration || 4000,
   }
 
-  // Include location if provided
-  if (config.room !== undefined) {
-    configMessage.room = config.room
-  }
-  if (config.row !== undefined) {
-    configMessage.row = config.row
-  }
-  if (config.table !== undefined) {
-    configMessage.table = config.table
-  }
-
-  mqttClient.publish(
-    MQTT_TOPIC_CONFIG, 
-    JSON.stringify(configMessage), 
-    { qos: 1 }, // QoS 1: at least once delivery
-    (err) => {
+  // Publish per-desk topic if location available
+  if (config.room !== undefined && config.row !== undefined && config.table !== undefined) {
+    const room = Number.parseInt(config.room)
+    const row = Number.parseInt(config.row)
+    const table = Number.parseInt(config.table)
+    const topic = `${MQTT_TOPIC_CONFIG_PREFIX}/${room}${row}${table}/config`
+    mqttClient.publish(topic, JSON.stringify(configMessage), { qos: 1 }, (err) => {
       if (err) {
-        console.error("[MQTT] ❌ Error publishing config:", err)
+        console.error("[MQTT] Error publishing config:", err)
       } else {
-        console.log("[MQTT] ✅ Published config:", configMessage)
+        console.log(`[MQTT] Published config to ${topic}:`, configMessage)
       }
-    }
-  )
+    })
+  } else {
+    // Fallback shared topic for backward compatibility
+    const topic = `${MQTT_TOPIC_CONFIG_PREFIX}/config`
+    mqttClient.publish(topic, JSON.stringify(configMessage), { qos: 1 }, (err) => {
+      if (err) {
+        console.error("[MQTT] Error publishing config (fallback):", err)
+      } else {
+        console.log(`[MQTT] Published config to fallback ${topic}:`, configMessage)
+      }
+    })
+  }
 }
 
 export function getMqttClient() {
   return mqttClient
 }
-

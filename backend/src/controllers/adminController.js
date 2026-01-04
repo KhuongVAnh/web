@@ -79,21 +79,25 @@ export const updateESP32Config = async (req, res) => {
   try {
     const { fs1, fs2, fs3, distanceCm, duration, room, row, table, deviceId } = req.body
 
-    // If deviceId is provided, use it; otherwise find ESP32 desk by location
     let esp32Desk = null
     let targetDeviceId = deviceId
+    let targetRoomNumber = room !== undefined ? Number.parseInt(room) : undefined
+    let targetRow = row !== undefined ? Number.parseInt(row) : undefined
+    let targetTable = table !== undefined ? Number.parseInt(table) : undefined
 
     if (deviceId) {
-      // Find desk by deviceId
       esp32Desk = await prisma.desk.findFirst({
         where: { esp32DeviceId: deviceId },
+        include: { room: true },
       })
       if (!esp32Desk) {
         return res.status(404).json({ message: `ESP32 device with ID ${deviceId} not found` })
       }
       targetDeviceId = deviceId
+      targetRoomNumber = targetRoomNumber ?? esp32Desk.room?.roomNumber
+      targetRow = targetRow ?? esp32Desk.row
+      targetTable = targetTable ?? esp32Desk.position
     } else if (room && row && table) {
-      // Find desk by location
       const targetRoom = await prisma.studyRoom.findFirst({
         where: { roomNumber: Number.parseInt(room) },
       })
@@ -107,6 +111,7 @@ export const updateESP32Config = async (req, res) => {
           row: Number.parseInt(row),
           position: Number.parseInt(table),
         },
+        include: { room: true },
       })
 
       if (!esp32Desk) {
@@ -114,11 +119,13 @@ export const updateESP32Config = async (req, res) => {
       }
 
       targetDeviceId = esp32Desk.esp32DeviceId || `ESP32-${esp32Desk.id}`
+      targetRoomNumber = targetRoomNumber ?? targetRoom.roomNumber
+      targetRow = targetRow ?? esp32Desk.row
+      targetTable = targetTable ?? esp32Desk.position
     } else {
       return res.status(400).json({ message: "Either deviceId or (room, row, table) must be provided" })
     }
 
-    // Prepare update data
     const updateData = {
       fs1: fs1 !== undefined ? fs1 : undefined,
       fs2: fs2 !== undefined ? fs2 : undefined,
@@ -126,17 +133,12 @@ export const updateESP32Config = async (req, res) => {
       distanceCm: distanceCm !== undefined ? distanceCm : undefined,
       duration: duration !== undefined ? duration : undefined,
       lastSync: new Date(),
+      room: targetRoomNumber !== undefined ? targetRoomNumber : undefined,
+      row: targetRow !== undefined ? targetRow : undefined,
+      table: targetTable !== undefined ? targetTable : undefined,
     }
+    Object.keys(updateData).forEach((key) => updateData[key] === undefined && delete updateData[key])
 
-    // Add location if provided
-    if (room !== undefined) updateData.room = Number.parseInt(room)
-    if (row !== undefined) updateData.row = Number.parseInt(row)
-    if (table !== undefined) updateData.table = Number.parseInt(table)
-
-    // Remove undefined values
-    Object.keys(updateData).forEach(key => updateData[key] === undefined && delete updateData[key])
-
-    // Update or create ESP32 config
     const config = await prisma.eSP32Config.upsert({
       where: { deviceId: targetDeviceId },
       update: updateData,
@@ -147,39 +149,46 @@ export const updateESP32Config = async (req, res) => {
         fs3: fs3 || 1,
         distanceCm: distanceCm || 30,
         duration: duration || 4000,
-        room: room ? Number.parseInt(room) : null,
-        row: row ? Number.parseInt(row) : null,
-        table: table ? Number.parseInt(table) : null,
+        room: targetRoomNumber ?? null,
+        row: targetRow ?? null,
+        table: targetTable ?? null,
         lastSync: new Date(),
       },
     })
 
-    // Update desk distance sensitivity if provided
     if (distanceCm !== undefined && esp32Desk) {
       await prisma.desk.update({
         where: { id: esp32Desk.id },
-        data: { 
+        data: {
           distanceSensitivity: distanceCm,
-          // If setting to ESP32_DISABLE_DISTANCE_CM (disabled), also turn off light and occupancy
-          ...(distanceCm === ESP32_DISABLE_DISTANCE_CM ? {
-            lightStatus: false,
-            occupancyStatus: false,
-            occupancyStartTime: null,
-          } : {}),
+          ...(distanceCm === ESP32_DISABLE_DISTANCE_CM
+            ? {
+                lightStatus: false,
+                occupancyStatus: false,
+                occupancyStartTime: null,
+              }
+            : {}),
         },
       })
     }
 
-    // Publish config to MQTT (include location if provided)
+    const locRoom = config.room ?? targetRoomNumber
+    const locRow = config.row ?? targetRow
+    const locTable = config.table ?? targetTable
+
+    if (locRoom === undefined || locRow === undefined || locTable === undefined) {
+      return res.status(400).json({ message: "room, row, table are required to publish config" })
+    }
+
     await publishConfig({
       fs1: config.fs1,
       fs2: config.fs2,
       fs3: config.fs3,
       distanceCm: config.distanceCm,
       duration: config.duration,
-      room: config.room,
-      row: config.row,
-      table: config.table,
+      room: locRoom,
+      row: locRow,
+      table: locTable,
     })
 
     res.json(config)
@@ -398,4 +407,3 @@ export const getMonthlyEnergyReport = async (req, res) => {
     res.status(500).json({ message: error.message })
   }
 }
-
