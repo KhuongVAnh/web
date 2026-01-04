@@ -8,8 +8,8 @@
 #include <ArduinoJson.h>
 
 // ========== WiFi ==========
-const char *WIFI_SSID = "Tầng 1";
-const char *WIFI_PASSWORD = "chinsomuoi";
+const char *WIFI_SSID = "Nhan Home";
+const char *WIFI_PASSWORD = "nhanhome";
 
 // ========== MQTT HiveMQ Cloud ==========
 const char *MQTT_BROKER = "5b91e3ce790f41e78062533f58758704.s1.eu.hivemq.cloud";
@@ -100,7 +100,7 @@ void connectMQTT()
     if (client.connect("ESP32_Client", MQTT_USERNAME, MQTT_PASSWORD))
     {
       Serial.println(" => Thanh cong!");
-      client.subscribe(MQTT_TOPIC_CONFIG);
+      client.subscribe(MQTT_TOPIC_CONFIG, 1);
       Serial.println("Da subscribe topic: " + String(MQTT_TOPIC_CONFIG));
     }
     else
@@ -595,7 +595,7 @@ void measurementTask(void *parameter)
       if ((currentTime - lastTime1) >= period1_ms)
       {
         float dist = readDistance();
-        bool currentTriggered = (dist < local_distanceCm);
+        bool currentTriggered = (dist < local_distanceCm) || (dist > 1200);
 
         // Kiểm tra thay đổi trạng thái
         if (currentTriggered != previousTriggeredState)

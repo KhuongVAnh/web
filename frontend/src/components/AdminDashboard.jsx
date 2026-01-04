@@ -568,7 +568,7 @@ export default function AdminDashboard({ activeTab, setActiveTab }) {
                               </button>
                             </div>
                             {desk.esp32DeviceId && (
-                              <div className="text-xs text-blue-600 mt-1 font-semibold">🔌 ESP32 (Cảm biến thực)</div>
+                              <div className="text-xs text-blue-600 mt-1 font-semibold"></div>
                             )}
                           </div>
                         )
