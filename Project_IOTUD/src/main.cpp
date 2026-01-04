@@ -661,8 +661,15 @@ void measurementTask(void *parameter)
         }
         lastTime3 = currentTime;
       }
+      // Nếu có thay đổi trạng thái, gửi ngay lập tức với QoS 1
+      if (stateChanged)
+      {
+        Serial.println("Gui ngay lap tuc do thay doi trang thai (QoS 1)...");
+        sendDataToMQTT(1);
+        stateChanged = false;
+      }
 
-      vTaskDelay(pdMS_TO_TICKS(1));
+      vTaskDelay(pdMS_TO_TICKS(100));
     }
 
     // Nếu không bị restart, xử lý gửi dữ liệu
@@ -674,22 +681,11 @@ void measurementTask(void *parameter)
       Serial.println("  Temperature: " + String(temperatureCount));
       Serial.println("  Humidity: " + String(humidityCount));
 
-      // Nếu có thay đổi trạng thái, gửi ngay lập tức với QoS 1
-      if (stateChanged)
-      {
-        Serial.println("Gui ngay lap tuc do thay doi trang thai (QoS 1)...");
-        sendDataToMQTT(1);
-        stateChanged = false;
-        // Không gửi thêm lần nữa trong chu kỳ này vì đã gửi ngay lập tức
-      }
-      else
-      {
-        // Gửi dữ liệu theo chu kỳ với QoS phù hợp
-        // Nếu đang kích hoạt (distance < threshold): QoS 1, nếu không: QoS 0
-        int qos = previousTriggeredState ? 1 : 0;
-        Serial.println("Gui du lieu theo chu ky (QoS " + String(qos) + ")...");
-        sendDataToMQTT(qos);
-      }
+      // Gửi dữ liệu theo chu kỳ với QoS phù hợp
+      // Nếu đang kích hoạt (distance < threshold): QoS 1, nếu không: QoS 0
+      int qos = previousTriggeredState ? 1 : 0;
+      Serial.println("Gui du lieu theo chu ky (QoS " + String(qos) + ")...");
+      sendDataToMQTT(qos);
     }
 
     vTaskDelay(pdMS_TO_TICKS(100));
@@ -791,4 +787,3 @@ void loop()
 {
   vTaskDelay(pdMS_TO_TICKS(1000));
 }
-
