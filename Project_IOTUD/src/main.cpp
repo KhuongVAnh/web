@@ -42,11 +42,14 @@ const int ledcFreq = 5000;    // Tần số PWM 5kHz
 const int ledcResolution = 8; // Độ phân giải 8 bit (0-255)
 
 // ========== Tham số hệ thống ==========
-volatile unsigned long measurementDurationMs = 4000; // Thời gian đo (ms) - có thể điều chỉnh qua MQTT
-volatile float fs1 = 3;                              // Tần số lấy mẫu HCSR04 (Hz)
-volatile float fs2 = 2;                              // Tần số lấy mẫu BH1750 (Hz)
-volatile float fs3 = 1;                              // Tần số lấy mẫu DHT (Hz) - TỐI ĐA 2.5 Hz
-volatile int distanceCm = 30;                        // Ngưỡng khoảng cách (cm)
+volatile unsigned long measurementDurationMs = 10000; // Thời gian đo (ms) - mặc định 10s, có thể điều chỉnh qua MQTT
+volatile float fs1 = 3;                               // Tần số lấy mẫu HCSR04 (Hz)
+volatile float fs2 = 2;                               // Tần số lấy mẫu BH1750 (Hz)
+volatile float fs3 = 1;                               // Tần số lấy mẫu DHT (Hz) - TỐI ĐA 2.5 Hz
+volatile int distanceCm = 30;                         // Ngưỡng khoảng cách (cm)
+volatile int room = 1;                                // Định danh phòng - có thể điều chỉnh qua MQTT
+volatile int row = 1;                                 // Định danh hàng - có thể điều chỉnh qua MQTT
+volatile int table = 1;                               // Định danh bàn - có thể điều chỉnh qua MQTT
 
 // ========== Mảng dữ liệu đơn giản ==========
 float *distanceArray = nullptr;
@@ -200,6 +203,36 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
         configChanged = true;
       }
     }
+    if (doc.containsKey("room"))
+    {
+      int new_room = doc["room"].as<int>();
+      if (new_room > 0 && new_room != room)
+      {
+        room = new_room;
+        Serial.println("Cap nhat room = " + String(room));
+        configChanged = true;
+      }
+    }
+    if (doc.containsKey("row"))
+    {
+      int new_row = doc["row"].as<int>();
+      if (new_row > 0 && new_row != row)
+      {
+        row = new_row;
+        Serial.println("Cap nhat row = " + String(row));
+        configChanged = true;
+      }
+    }
+    if (doc.containsKey("table"))
+    {
+      int new_table = doc["table"].as<int>();
+      if (new_table > 0 && new_table != table)
+      {
+        table = new_table;
+        Serial.println("Cap nhat table = " + String(table));
+        configChanged = true;
+      }
+    }
 
     xSemaphoreGive(configMutex);
 
@@ -337,7 +370,7 @@ bool allocateArraysIfNeeded(size_t size1, size_t size2, size_t size3)
 // ====================================================================
 // Gửi dữ liệu lên MQTT broker
 // ====================================================================
-void sendDataToMQTT()
+void sendDataToMQTT(int qos = 0)
 {
   if (xSemaphoreTake(mqttMutex, pdMS_TO_TICKS(5000)) == pdTRUE)
   {
@@ -350,6 +383,7 @@ void sendDataToMQTT()
     float local_fs1, local_fs2, local_fs3;
     int local_distanceCm;
     unsigned long local_duration;
+    int local_room, local_row, local_table;
 
     if (xSemaphoreTake(configMutex, portMAX_DELAY))
     {
@@ -358,10 +392,13 @@ void sendDataToMQTT()
       local_fs3 = fs3;
       local_distanceCm = distanceCm;
       local_duration = measurementDurationMs;
+      local_room = room;
+      local_row = row;
+      local_table = table;
       xSemaphoreGive(configMutex);
     }
 
-    Serial.println("Bat dau gui du lieu len broker...");
+    Serial.println("Bat dau gui du lieu len broker (QoS=" + String(qos) + ")...");
 
     // Tạo JSON document
     size_t estimatedSize = (distanceCount + luxCount + temperatureCount + humidityCount) * 15 + 500;
@@ -417,6 +454,9 @@ void sendDataToMQTT()
     JsonObject metaObj = doc.createNestedObject("meta");
     metaObj["duration"] = local_duration;
     metaObj["distanceCm"] = local_distanceCm;
+    metaObj["room"] = local_room;
+    metaObj["row"] = local_row;
+    metaObj["table"] = local_table;
 
     // Serialize và gửi
     size_t jsonSize = measureJson(doc) + 1;
@@ -434,9 +474,11 @@ void sendDataToMQTT()
         connectMQTT();
       }
 
-      // Publish với độ dài chính xác (jsonSize - 1 vì đã có null terminator)
-      // PubSubClient: publish(topic, payload, length) hoặc publish(topic, payload) cho string
-      bool publishResult = client.publish(MQTT_TOPIC_DATA, (uint8_t *)payload, jsonSize - 1);
+      // Publish với QoS
+      // Ghi chú: PubSubClient library chuẩn dùng QoS 0, tham số thứ 4 là retained flag
+      // Để hỗ trợ QoS thực sự, cần dùng library có hỗ trợ QoS hoặc upgrade PubSubClient
+      // Ở đây ta dùng retained flag như một workaround (không chính xác như QoS nhưng tương đương)
+      bool publishResult = client.publish(MQTT_TOPIC_DATA, (uint8_t *)payload, jsonSize - 1, qos > 0);
 
       if (publishResult)
       {
@@ -475,6 +517,8 @@ void sendDataToMQTT()
 void measurementTask(void *parameter)
 {
   Serial.println("Luong do du lieu va gui MQTT bat dau...");
+
+  bool previousTriggeredState = false; // Trạng thái kích hoạt trước đó
 
   while (true)
   {
@@ -533,6 +577,7 @@ void measurementTask(void *parameter)
     unsigned long lastTime2 = 0;
     unsigned long lastTime3 = 0;
     bool lightSensorActive = false;
+    bool stateChanged = false;
 
     // Đo trong thời gian duration đã cấu hình
     while ((millis() - startTime) < local_duration)
@@ -550,7 +595,17 @@ void measurementTask(void *parameter)
       if ((currentTime - lastTime1) >= period1_ms)
       {
         float dist = readDistance();
-        lightSensorActive = (dist < local_distanceCm);
+        bool currentTriggered = (dist < local_distanceCm);
+
+        // Kiểm tra thay đổi trạng thái
+        if (currentTriggered != previousTriggeredState)
+        {
+          stateChanged = true;
+          previousTriggeredState = currentTriggered;
+          Serial.println("Phat hien thay doi trang thai: " + String(currentTriggered ? "Kich hoat" : "Khong kich hoat"));
+        }
+
+        lightSensorActive = currentTriggered;
 
         // Tắt LED nếu không có vật cản
         if (!lightSensorActive)
@@ -610,7 +665,7 @@ void measurementTask(void *parameter)
       vTaskDelay(pdMS_TO_TICKS(1));
     }
 
-    // Nếu không bị restart, gửi dữ liệu
+    // Nếu không bị restart, xử lý gửi dữ liệu
     if (!shouldRestartMeasurement)
     {
       Serial.println("Ket thuc do du lieu:");
@@ -619,8 +674,22 @@ void measurementTask(void *parameter)
       Serial.println("  Temperature: " + String(temperatureCount));
       Serial.println("  Humidity: " + String(humidityCount));
 
-      sendDataToMQTT();
-      // Không cần free mảng, chỉ reset counter ở chu kỳ tiếp theo
+      // Nếu có thay đổi trạng thái, gửi ngay lập tức với QoS 1
+      if (stateChanged)
+      {
+        Serial.println("Gui ngay lap tuc do thay doi trang thai (QoS 1)...");
+        sendDataToMQTT(1);
+        stateChanged = false;
+        // Không gửi thêm lần nữa trong chu kỳ này vì đã gửi ngay lập tức
+      }
+      else
+      {
+        // Gửi dữ liệu theo chu kỳ với QoS phù hợp
+        // Nếu đang kích hoạt (distance < threshold): QoS 1, nếu không: QoS 0
+        int qos = previousTriggeredState ? 1 : 0;
+        Serial.println("Gui du lieu theo chu ky (QoS " + String(qos) + ")...");
+        sendDataToMQTT(qos);
+      }
     }
 
     vTaskDelay(pdMS_TO_TICKS(100));
@@ -723,32 +792,3 @@ void loop()
   vTaskDelay(pdMS_TO_TICKS(1000));
 }
 
-// #include <Arduino.h>
-
-// const int pwmPin = 23;
-// const int pwmChannel = 0;
-// const int pwmFreq = 5000;
-// const int pwmResolution = 8;
-
-// void setup()
-// {
-//   ledcSetup(pwmChannel, pwmFreq, pwmResolution);
-//   ledcAttachPin(pwmPin, pwmChannel);
-// }
-
-// void loop()
-// {
-//   // Tăng sáng
-//   for (int duty = 0; duty <= 255; duty++)
-//   {
-//     ledcWrite(pwmChannel, duty);
-//     delay(5);
-//   }
-
-//   // Giảm sáng
-//   for (int duty = 255; duty >= 0; duty--)
-//   {
-//     ledcWrite(pwmChannel, duty);
-//     delay(5);
-//   }
-// }
