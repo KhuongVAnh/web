@@ -130,7 +130,9 @@ async function handleSensorData(topic, data) {
       }
 
       const threshold = esp32Config?.distanceCm || data.meta?.distanceCm || desk.distanceSensitivity || 30
-      const isOccupied = threshold > 0 && (lastDistance < threshold || lastDistance > 1200) && lastDistance > 0
+      const isOccupied =
+        threshold > 0 &&
+        distanceReadings.some(value => value < threshold)
 
       const roomNum = Number.parseInt(roomNumber)
       const rowNum = Number.parseInt(row)
@@ -161,6 +163,21 @@ async function handleSensorData(topic, data) {
           },
         })
         console.log(`[MQTT] Desk ${desk.id} became occupied`)
+
+        // bật đèn
+        const configMessage = {
+          lightOn: true
+        }
+
+        const topic = `${MQTT_TOPIC_CONFIG_PREFIX}/${roomNum}${rowNum}${tableNum}/config`
+        mqttClient.publish(topic, JSON.stringify(configMessage), { qos: 1 }, (err) => {
+          if (err) {
+            console.error("[MQTT] Error publishing config:", err)
+          } else {
+            console.log(`[MQTT] Published config to ${topic}:`, configMessage)
+          }
+        })
+
       } else if (!isOccupied && desk.occupancyStatus) {
         if (desk.occupancyStartTime) {
           const usageMinutes = Math.floor((now - desk.occupancyStartTime) / 60000)
@@ -193,6 +210,21 @@ async function handleSensorData(topic, data) {
             },
           })
           console.log(`[MQTT] Desk ${desk.id} became unoccupied (used ${usageMinutes} min, ${energyWh.toFixed(2)} Wh)`)
+
+          // tắt đèn
+          const configMessage = {
+            lightOn: false
+          }
+
+          const topic = `${MQTT_TOPIC_CONFIG_PREFIX}/${roomNum}${rowNum}${tableNum}/config`
+          mqttClient.publish(topic, JSON.stringify(configMessage), { qos: 1 }, (err) => {
+            if (err) {
+              console.error("[MQTT] Error publishing config:", err)
+            } else {
+              console.log(`[MQTT] Published config to ${topic}:`, configMessage)
+            }
+          })
+
         }
       } else if (isOccupied) {
         await prisma.desk.update({
