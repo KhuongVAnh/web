@@ -1,7 +1,7 @@
 ﻿import { useState, useEffect } from "react"
 import axios from "axios"
 import { toast } from "react-toastify"
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, LineChart, Line } from "recharts"
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, LineChart, Line, ComposedChart } from "recharts"
 import { Lightbulb, Settings, Zap, BarChart3, Thermometer, Droplets, Clock, User, Save, Loader2 } from "lucide-react"
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:3001/api"
@@ -35,6 +35,9 @@ export default function AdminDashboard({ activeTab, setActiveTab }) {
   const [compareMonths, setCompareMonths] = useState([])
   const [monthlyReport, setMonthlyReport] = useState(null)
   const [viewMode, setViewMode] = useState("byRoom") // "byRoom" or "total"
+  const [deskDailyReport, setDeskDailyReport] = useState(null)
+  const [deskDailyLoading, setDeskDailyLoading] = useState(false)
+  const [selectedDeskReportId, setSelectedDeskReportId] = useState(null)
 
   const token = localStorage.getItem("token")
 
@@ -70,6 +73,11 @@ export default function AdminDashboard({ activeTab, setActiveTab }) {
       fetchMonthlyEnergyReport()
     }
   }, [activeTab, token, selectedMonth, selectedYear, compareMode, compareMonths])
+
+  useEffect(() => {
+    setDeskDailyReport(null)
+    setSelectedDeskReportId(null)
+  }, [selectedMonth, selectedYear])
 
   const fetchEnergyReport = async () => {
     try {
@@ -143,6 +151,31 @@ export default function AdminDashboard({ activeTab, setActiveTab }) {
     } catch (error) {
       console.error("Lỗi tải báo cáo theo tháng:", error)
       toast.error("Lỗi tải báo cáo theo tháng: " + (error.response?.data?.message || error.message))
+    }
+  }
+
+
+  const fetchDeskDailyReport = async (deskId) => {
+    try {
+      setDeskDailyLoading(true)
+      setSelectedDeskReportId(deskId)
+      setDeskDailyReport(null)
+
+      const response = await axios.get(`${API_BASE}/admin/energy-report/daily`, {
+        params: {
+          deskId,
+          month: selectedMonth,
+          year: selectedYear,
+        },
+        headers: { Authorization: `Bearer ${token}` },
+      })
+
+      setDeskDailyReport(response.data)
+    } catch (error) {
+      console.error("Lỗi tải biểu đồ theo ngày:", error)
+      toast.error("Lỗi tải biểu đồ theo ngày: " + (error.response?.data?.message || error.message))
+    } finally {
+      setDeskDailyLoading(false)
     }
   }
 
@@ -959,20 +992,31 @@ export default function AdminDashboard({ activeTab, setActiveTab }) {
                           </div>
                         </div>
 
-                        <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
-                          {room.desks.map((desk) => (
-                            <div key={desk.id} className="border rounded p-2 text-sm">
-                              <div className="font-medium">
-                                Bàn {desk.row}-{desk.position}
-                              </div>
-                              <div className="text-xs text-gray-600 mt-1">
-                                <div>Năng lượng: {desk.energyWh} Wh</div>
-                                <div>Sử dụng: {desk.usageMinutes} phút</div>
-                                <div>Công suất: {desk.lampPowerW} W</div>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
+                                                  <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
+                            {room.desks.map((desk) => {
+                              const isSelectedDesk = selectedDeskReportId === desk.id
+                              return (
+                                <button
+                                  key={desk.id}
+                                  type="button"
+                                  onClick={() => fetchDeskDailyReport(desk.id)}
+                                  className={`border rounded p-2 text-sm text-left transition cursor-pointer w-full ${isSelectedDesk ? "ring-2 ring-blue-500 bg-blue-50" : "hover:bg-gray-50"}`}
+                                >
+                                  <div className="font-medium">
+                                    Bàn {desk.row}-{desk.position}
+                                  </div>
+                                  <div className="text-xs text-gray-600 mt-1">
+                                    <div>Năng lượng: {desk.energyWh} Wh</div>
+                                    <div>Sử dụng: {desk.usageMinutes} phút</div>
+                                    <div>Công suất: {desk.lampPowerW} W</div>
+                                  </div>
+                                  <div className="text-[11px] text-blue-600 mt-2">
+                                    Nhấn để xem biểu đồ theo ngày
+                                  </div>
+                                </button>
+                              )
+                            })}
+                          </div>
                       </div>
                     ))}
                   </div>
@@ -993,6 +1037,38 @@ export default function AdminDashboard({ activeTab, setActiveTab }) {
                         </div>
                       </div>
                     </div>
+                  </div>
+                )}
+
+                {/* Desk Daily Detail */}
+                {(deskDailyLoading || deskDailyReport) && (
+                  <div className="border rounded-lg p-4">
+                    <div className="flex items-center justify-between mb-4">
+                      <div>
+                          <h4 className="font-bold text-gray-900">
+                            {deskDailyReport
+                              ? `Chi tiết bàn ${deskDailyReport.desk?.row}-${deskDailyReport.desk?.position} (${deskDailyReport.desk?.roomName || "Phòng"})`
+                              : "Đang tải biểu đồ bàn..."}
+                          </h4>
+                          <p className="text-sm text-gray-600">
+                            Biểu đồ năng lượng theo ngày trong tháng {String(selectedMonth).padStart(2, "0")}/{selectedYear}
+                          </p>
+                        </div>
+                        {deskDailyReport && (
+                          <div className="text-sm text-gray-600 text-right">
+                            <div>Tổng năng lượng: {deskDailyReport.summary.totalEnergyWh} Wh</div>
+                            <div>Tổng thời gian: {deskDailyReport.summary.totalUsageMinutes} phút</div>
+                          </div>
+                        )}
+                      </div>
+                      {deskDailyLoading && <p className="text-gray-600">Đang tải biểu đồ...</p>}
+                      {!deskDailyLoading && deskDailyReport ? (
+                        deskDailyReport.days.length > 0 ? (
+                          <DailyDeskEnergyChart report={deskDailyReport} />
+                        ) : (
+                          <p className="text-gray-600">Chưa có dữ liệu cho tháng này.</p>
+                        )
+                      ) : null}
                   </div>
                 )}
 
@@ -1053,6 +1129,49 @@ export default function AdminDashboard({ activeTab, setActiveTab }) {
         </div>
       )}
     </div>
+  )
+}
+
+// Daily desk chart component
+function DailyDeskEnergyChart({ report }) {
+  const chartData = report.days.map((day) => ({
+    day: String(day.day).padStart(2, "0"),
+    energyWh: Number.parseFloat(day.energyWh),
+    usageMinutes: day.usageMinutes,
+  }))
+
+  return (
+    <ResponsiveContainer width="100%" height={300}>
+      <ComposedChart data={chartData}>
+        <CartesianGrid strokeDasharray="3 3" />
+        <XAxis dataKey="day" />
+        <YAxis
+          yAxisId="left"
+          label={{ value: "Năng lượng (Wh)", angle: -90, position: "insideLeft" }}
+        />
+        <YAxis
+          yAxisId="right"
+          orientation="right"
+          label={{ value: "Thời gian (phút)", angle: 90, position: "insideRight" }}
+        />
+        <Tooltip />
+        <Legend />
+        <Bar
+          yAxisId="left"
+          dataKey="energyWh"
+          fill="#3b82f6"
+          name="Năng lượng (Wh)"
+        />
+        <Line
+          yAxisId="right"
+          type="monotone"
+          dataKey="usageMinutes"
+          stroke="#f59e0b"
+          strokeWidth={2}
+          name="Thời gian sử dụng (phút)"
+        />
+      </ComposedChart>
+    </ResponsiveContainer>
   )
 }
 

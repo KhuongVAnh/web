@@ -4,6 +4,7 @@ import {
   getStats,
   getEnergyReport,
   getMonthlyEnergyReport,
+  getDeskDailyEnergyReport,
   updateESP32Config,
   bulkUpdateDesks,
 } from "../controllers/adminController.js"
@@ -12,41 +13,38 @@ const router = Router()
 
 /**
  * GET /api/admin/stats
- * @description Lấy thống kê tổng quan hệ thống (chỉ admin)
- * @access Private (Admin only)
+ * Overview stats (admin only)
  */
 router.get("/stats", auth, rbac("admin"), getStats)
 
 /**
  * GET /api/admin/energy-report
- * @description Lấy báo cáo năng lượng tích lũy theo phòng (chỉ admin)
- * @access Private (Admin only)
+ * Total energy report by room (admin only)
  */
 router.get("/energy-report", auth, rbac("admin"), getEnergyReport)
 
 /**
  * GET /api/admin/energy-report/monthly
- * @description Lấy báo cáo năng lượng theo tháng (chỉ admin)
- * @access Private (Admin only)
- * @query {Number} month - Tháng (1-12)
- * @query {Number} year - Năm
- * @query {String} compareMonths - JSON array of {month, year} để so sánh
+ * Monthly energy report (admin only)
  */
 router.get("/energy-report/monthly", auth, rbac("admin"), getMonthlyEnergyReport)
 
 /**
+ * GET /api/admin/energy-report/daily
+ * Daily energy report for a specific desk (admin only)
+ */
+router.get("/energy-report/daily", auth, rbac("admin"), getDeskDailyEnergyReport)
+
+/**
  * POST /api/admin/esp32/config
- * @description Cập nhật cấu hình ESP32 (chỉ admin)
- * @access Private (Admin only)
+ * Update ESP32 config (admin only)
  */
 router.post("/esp32/config", auth, rbac("admin"), updateESP32Config)
 
 /**
  * POST /api/admin/desks/bulk-update
- * @description Cập nhật hàng loạt cấu hình bàn học (chỉ admin)
- * @access Private (Admin only)
+ * Bulk update desks (admin only)
  */
 router.post("/desks/bulk-update", auth, rbac("admin"), bulkUpdateDesks)
 
 export default router
-

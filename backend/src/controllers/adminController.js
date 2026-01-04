@@ -407,3 +407,87 @@ export const getMonthlyEnergyReport = async (req, res) => {
     res.status(500).json({ message: error.message })
   }
 }
+
+// Get daily energy usage for a specific desk within a month
+export const getDeskDailyEnergyReport = async (req, res) => {
+  try {
+    const { deskId, month, year } = req.query
+
+    const parsedDeskId = Number.parseInt(deskId)
+    if (!parsedDeskId) {
+      return res.status(400).json({ message: "deskId is required" })
+    }
+
+    const currentDate = new Date()
+    const selectedMonth = month ? Number.parseInt(month) : currentDate.getMonth() + 1
+    const selectedYear = year ? Number.parseInt(year) : currentDate.getFullYear()
+
+    if (selectedMonth < 1 || selectedMonth > 12) {
+      return res.status(400).json({ message: "Invalid month (1-12)" })
+    }
+    if (selectedYear < 2020 || selectedYear > 2100) {
+      return res.status(400).json({ message: "Invalid year" })
+    }
+
+    const desk = await prisma.desk.findUnique({
+      where: { id: parsedDeskId },
+      include: { room: true },
+    })
+
+    if (!desk) {
+      return res.status(404).json({ message: "Desk not found" })
+    }
+
+    const { startDate, endDate } = getMonthRange(selectedMonth, selectedYear)
+    const energyRecords = await prisma.energyRecord.findMany({
+      where: {
+        deskId: parsedDeskId,
+        createdAt: {
+          gte: startDate,
+          lte: endDate,
+        },
+      },
+    })
+
+    const daysInMonth = new Date(selectedYear, selectedMonth, 0).getDate()
+    const days = Array.from({ length: daysInMonth }, (_, idx) => ({
+      day: idx + 1,
+      energyWh: 0,
+      usageMinutes: 0,
+    }))
+
+    energyRecords.forEach((record) => {
+      const day = new Date(record.createdAt).getDate()
+      const slot = days[day - 1]
+      slot.energyWh += record.energyWh
+      slot.usageMinutes += record.durationMinutes
+    })
+
+    const summary = calculateMonthlyStats(energyRecords)
+
+    res.json({
+      desk: {
+        id: desk.id,
+        row: desk.row,
+        position: desk.position,
+        lampPowerW: desk.lampPowerW,
+        roomId: desk.roomId,
+        roomName: desk.room?.name,
+        roomNumber: desk.room?.roomNumber,
+      },
+      month: selectedMonth,
+      year: selectedYear,
+      summary: {
+        totalEnergyWh: Number.parseFloat(summary.totalEnergyWh.toFixed(2)),
+        totalUsageMinutes: summary.totalUsageMinutes,
+      },
+      days: days.map((d) => ({
+        ...d,
+        energyWh: Number.parseFloat(d.energyWh.toFixed(2)),
+      })),
+    })
+  } catch (error) {
+    console.error("Error in getDeskDailyEnergyReport:", error)
+    res.status(500).json({ message: error.message })
+  }
+}
