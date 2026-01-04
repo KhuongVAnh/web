@@ -52,7 +52,8 @@ model Desk {
   occupancyStatus Boolean @default(false) // Is desk occupied
   occupancyStartTime DateTime? // When current occupancy started
   totalUsageMinutes Int @default(0) // Total accumulated usage
-  
+  disabled        Boolean @default(false) // Nếu true: bàn bị vô hiệu, cảm biến bị tắt
+
   // Energy tracking
   energyConsumedWh Float @default(0.0) // Energy consumed in Wh
   

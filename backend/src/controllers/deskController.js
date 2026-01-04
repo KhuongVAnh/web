@@ -60,112 +60,120 @@ export const toggleLight = async (req, res) => {
       return res.status(404).json({ message: "Desk not found" })
     }
 
-    const isESP32Desk = desk.esp32DeviceId !== null
-    const newLightStatus = !desk.lightStatus
-    const updateData = { lightStatus: newLightStatus }
+    const newDisabledStatus = !desk.disabled
+    const updateData = { disabled: newDisabledStatus }
 
-    if (isESP32Desk) {
-      if (!newLightStatus) {
-        updateData.occupancyStatus = false
-        updateData.occupancyStartTime = null
+    // Luôn gửi config cho bàn (mỗi bàn gắn 1 ESP32)
+    if (newDisabledStatus) {
+      updateData.occupancyStatus = false
+      updateData.occupancyStartTime = null
+      updateData.lightStatus = false
 
-        if (desk.occupancyStatus && desk.occupancyStartTime) {
-          const now = new Date()
-          const usageMinutes = Math.floor((now - desk.occupancyStartTime) / 60000)
-          const totalUsage = desk.totalUsageMinutes + usageMinutes
-          const energyWh = (desk.lampPowerW * usageMinutes) / 60
-          const totalEnergy = desk.energyConsumedWh + energyWh
+      if (desk.occupancyStatus && desk.occupancyStartTime) {
+        const now = new Date()
+        const usageMinutes = Math.floor((now - desk.occupancyStartTime) / 60000)
+        const totalUsage = desk.totalUsageMinutes + usageMinutes
+        const energyWh = (desk.lampPowerW * usageMinutes) / 60
+        const totalEnergy = desk.energyConsumedWh + energyWh
 
-          await prisma.energyRecord.create({
+        await prisma.energyRecord.create({
+          data: {
+            deskId: desk.id,
+            powerW: desk.lampPowerW,
+            durationMinutes: usageMinutes,
+            energyWh: energyWh,
+          },
+        })
+
+        updateData.totalUsageMinutes = totalUsage
+        updateData.energyConsumedWh = totalEnergy
+      }
+
+      try {
+        const deviceId = desk.esp32DeviceId || `ESP32-${desk.id}`
+        let esp32Config = await prisma.eSP32Config.findFirst({ where: { deviceId } })
+
+        if (!esp32Config) {
+          esp32Config = await prisma.eSP32Config.create({
             data: {
-              deskId: desk.id,
-              powerW: desk.lampPowerW,
-              durationMinutes: usageMinutes,
-              energyWh: energyWh,
+              deviceId,
+              fs1: 3,
+              fs2: 2,
+              fs3: 1,
+              distanceCm: ESP32_DISABLE_DISTANCE_CM,
+              duration: 4000,
+              room: desk.room?.roomNumber ?? null,
+              row: desk.row,
+              table: desk.position,
             },
           })
-
-          updateData.totalUsageMinutes = totalUsage
-          updateData.energyConsumedWh = totalEnergy
         }
 
-        try {
-          const deviceId = desk.esp32DeviceId || `ESP32-${desk.id}`
-          let esp32Config = await prisma.eSP32Config.findFirst({ where: { deviceId } })
+        await publishConfig({
+          fs1: esp32Config.fs1,
+          fs2: esp32Config.fs2,
+          fs3: esp32Config.fs3,
+          distanceCm: ESP32_DISABLE_DISTANCE_CM,
+          duration: esp32Config.duration,
+          room: desk.room?.roomNumber,
+          row: desk.row,
+          table: desk.position,
+        })
 
-          if (!esp32Config) {
-            esp32Config = await prisma.eSP32Config.create({
-              data: {
-                deviceId,
-                fs1: 3,
-                fs2: 2,
-                fs3: 1,
-                distanceCm: ESP32_DISABLE_DISTANCE_CM,
-                duration: 4000,
-              },
-            })
-          }
+        await prisma.eSP32Config.update({
+          where: { id: esp32Config.id },
+          data: { distanceCm: ESP32_DISABLE_DISTANCE_CM, lastSync: new Date() },
+        })
 
-          await publishConfig({
-            fs1: esp32Config.fs1,
-            fs2: esp32Config.fs2,
-            fs3: esp32Config.fs3,
-            distanceCm: ESP32_DISABLE_DISTANCE_CM,
-            duration: esp32Config.duration,
-            room: desk.room?.roomNumber,
-            row: desk.row,
-            table: desk.position,
+        updateData.distanceSensitivity = ESP32_DISABLE_DISTANCE_CM
+        console.log(`[Desk Toggle] Disabled desk ${desk.id} (distanceCm=${ESP32_DISABLE_DISTANCE_CM})`)
+      } catch (mqttError) {
+        console.error("[Desk Toggle] Error sending MQTT config:", mqttError)
+      }
+    } else {
+      updateData.occupancyStatus = false
+      updateData.occupancyStartTime = null
+      updateData.lightStatus = false
+      try {
+        const deviceId = desk.esp32DeviceId || `ESP32-${desk.id}`
+        let esp32Config = await prisma.eSP32Config.findFirst({ where: { deviceId } })
+
+        if (!esp32Config) {
+          esp32Config = await prisma.eSP32Config.create({
+            data: {
+              deviceId,
+              fs1: 3,
+              fs2: 2,
+              fs3: 1,
+              distanceCm: ESP32_ENABLE_DISTANCE_CM,
+              duration: 4000,
+              room: desk.room?.roomNumber ?? null,
+              row: desk.row,
+              table: desk.position,
+            },
           })
-
-          await prisma.eSP32Config.update({
-            where: { id: esp32Config.id },
-            data: { distanceCm: ESP32_DISABLE_DISTANCE_CM, lastSync: new Date() },
-          })
-
-          updateData.distanceSensitivity = ESP32_DISABLE_DISTANCE_CM
-          console.log(`[Toggle Light] Sent MQTT config: distanceCm = ${ESP32_DISABLE_DISTANCE_CM} (turn off)`)
-        } catch (mqttError) {
-          console.error("[Toggle Light] Error sending MQTT config:", mqttError)
         }
-      } else {
-        try {
-          const deviceId = desk.esp32DeviceId || `ESP32-${desk.id}`
-          let esp32Config = await prisma.eSP32Config.findFirst({ where: { deviceId } })
 
-          if (!esp32Config) {
-            esp32Config = await prisma.eSP32Config.create({
-              data: {
-                deviceId,
-                fs1: 3,
-                fs2: 2,
-                fs3: 1,
-                distanceCm: ESP32_ENABLE_DISTANCE_CM,
-                duration: 4000,
-              },
-            })
-          }
+        await publishConfig({
+          fs1: esp32Config.fs1,
+          fs2: esp32Config.fs2,
+          fs3: esp32Config.fs3,
+          distanceCm: ESP32_ENABLE_DISTANCE_CM,
+          duration: esp32Config.duration,
+          room: desk.room?.roomNumber,
+          row: desk.row,
+          table: desk.position,
+        })
 
-          await publishConfig({
-            fs1: esp32Config.fs1,
-            fs2: esp32Config.fs2,
-            fs3: esp32Config.fs3,
-            distanceCm: ESP32_ENABLE_DISTANCE_CM,
-            duration: esp32Config.duration,
-            room: desk.room?.roomNumber,
-            row: desk.row,
-            table: desk.position,
-          })
+        await prisma.eSP32Config.update({
+          where: { id: esp32Config.id },
+          data: { distanceCm: ESP32_ENABLE_DISTANCE_CM, lastSync: new Date() },
+        })
 
-          await prisma.eSP32Config.update({
-            where: { id: esp32Config.id },
-            data: { distanceCm: ESP32_ENABLE_DISTANCE_CM, lastSync: new Date() },
-          })
-
-          updateData.distanceSensitivity = ESP32_ENABLE_DISTANCE_CM
-          console.log(`[Toggle Light] Sent MQTT config: distanceCm = ${ESP32_ENABLE_DISTANCE_CM} (turn on)`)
-        } catch (mqttError) {
-          console.error("[Toggle Light] Error sending MQTT config:", mqttError)
-        }
+        updateData.distanceSensitivity = ESP32_ENABLE_DISTANCE_CM
+        console.log(`[Desk Toggle] Enabled desk ${desk.id} (distanceCm=${ESP32_ENABLE_DISTANCE_CM})`)
+      } catch (mqttError) {
+        console.error("[Desk Toggle] Error sending MQTT config:", mqttError)
       }
     }
 
@@ -174,11 +182,7 @@ export const toggleLight = async (req, res) => {
       data: updateData,
     })
 
-    if (isESP32Desk) {
-      console.log(`[Toggle Light] ${newLightStatus ? "Bật" : "Tắt"} ESP32 bàn ${desk.row}-${desk.position}`)
-    } else {
-      console.log(`[Toggle Light] ${newLightStatus ? "Bật" : "Tắt"} đèn bàn ${desk.row}-${desk.position}`)
-    }
+    console.log(`[Desk Toggle] ${newDisabledStatus ? "Disabled" : "Enabled"} desk ${desk.row}-${desk.position}`)
 
     res.json(updatedDesk)
   } catch (error) {

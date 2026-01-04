@@ -109,6 +109,11 @@ async function handleSensorData(topic, data) {
       return
     }
 
+    // if (desk.disabled) {
+    //   console.log(`[MQTT] Desk ${desk.id} is disabled; ignoring sensor data`)
+    //   return
+    // }
+
     console.log(`[MQTT] Data for Desk ${desk.id} (room ${roomNumber}, row ${row}, table ${table})`)
 
     // Distance data

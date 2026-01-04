@@ -203,36 +203,36 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
         configChanged = true;
       }
     }
-    if (doc.containsKey("room"))
-    {
-      int new_room = doc["room"].as<int>();
-      if (new_room > 0 && new_room != room)
-      {
-        room = new_room;
-        Serial.println("Cap nhat room = " + String(room));
-        configChanged = true;
-      }
-    }
-    if (doc.containsKey("row"))
-    {
-      int new_row = doc["row"].as<int>();
-      if (new_row > 0 && new_row != row)
-      {
-        row = new_row;
-        Serial.println("Cap nhat row = " + String(row));
-        configChanged = true;
-      }
-    }
-    if (doc.containsKey("table"))
-    {
-      int new_table = doc["table"].as<int>();
-      if (new_table > 0 && new_table != table)
-      {
-        table = new_table;
-        Serial.println("Cap nhat table = " + String(table));
-        configChanged = true;
-      }
-    }
+    // if (doc.containsKey("room"))
+    // {
+    //   int new_room = doc["room"].as<int>();
+    //   if (new_room > 0 && new_room != room)
+    //   {
+    //     room = new_room;
+    //     Serial.println("Cap nhat room = " + String(room));
+    //     configChanged = true;
+    //   }
+    // }
+    // if (doc.containsKey("row"))
+    // {
+    //   int new_row = doc["row"].as<int>();
+    //   if (new_row > 0 && new_row != row)
+    //   {
+    //     row = new_row;
+    //     Serial.println("Cap nhat row = " + String(row));
+    //     configChanged = true;
+    //   }
+    // }
+    // if (doc.containsKey("table"))
+    // {
+    //   int new_table = doc["table"].as<int>();
+    //   if (new_table > 0 && new_table != table)
+    //   {
+    //     table = new_table;
+    //     Serial.println("Cap nhat table = " + String(table));
+    //     configChanged = true;
+    //   }
+    // }
 
     xSemaphoreGive(configMutex);
 
