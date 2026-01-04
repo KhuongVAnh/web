@@ -12,6 +12,6 @@
 export function startMockDataService(intervalMs = 10000) {
   console.log(`[Mock Data] ⚠️  Service disabled - No mock data generation`)
   console.log(`[Mock Data] ℹ️  Only Room 1 has real DHT data from ESP32`)
-  console.log(`[Mock Data] ℹ️  Desk occupancy status is FIXED - Only ESP32 desk (Room 1, Row 1, Table 1) changes via MQTT`)
+  console.log(`[Mock Data] ℹ️  Desk occupancy status is FIXED - Only ESP32 desk (identified by esp32DeviceId) changes via MQTT`)
 }
 

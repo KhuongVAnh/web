@@ -18,6 +18,10 @@ export default function AdminDashboard({ activeTab, setActiveTab }) {
     fs3: 1,
     distanceCm: 30,
     duration: 4000,
+    room: null,
+    row: null,
+    table: null,
+    deviceId: null,
   })
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -81,7 +85,7 @@ export default function AdminDashboard({ activeTab, setActiveTab }) {
   const handleToggleLight = async (deskId) => {
     // Add desk to toggling set
     setTogglingDesks((prev) => new Set(prev).add(deskId))
-    
+
     try {
       const response = await axios.patch(
         `${API_BASE}/desks/${deskId}/toggle-light`,
@@ -90,18 +94,19 @@ export default function AdminDashboard({ activeTab, setActiveTab }) {
           headers: { Authorization: `Bearer ${token}` },
         },
       )
-      
+
       // Refresh rooms to get updated state
       const roomsResponse = await axios.get(`${API_BASE}/rooms`)
       setRooms(roomsResponse.data)
-      
+
       // Show success message
       const desk = roomsResponse.data
         .flatMap((r) => r.desks || [])
         .find((d) => d.id === deskId)
-      
+
       if (desk) {
-        const isESP32Desk = desk.roomId === 1 && desk.row === 1 && desk.position === 1
+        // Check if desk has ESP32 device
+        const isESP32Desk = desk.esp32DeviceId !== null
         if (isESP32Desk) {
           if (response.data.lightStatus) {
             toast.success("✅ Đã bật bàn học - ESP32 sẽ phát hiện người ngồi", {
@@ -278,41 +283,37 @@ export default function AdminDashboard({ activeTab, setActiveTab }) {
       <div className="flex gap-2 border-b overflow-x-auto">
         <button
           onClick={() => setActiveTab("overview")}
-          className={`px-4 py-2 font-medium border-b-2 transition whitespace-nowrap ${
-            activeTab === "overview"
-              ? "border-blue-600 text-blue-600"
-              : "border-transparent text-gray-600 hover:text-gray-900"
-          }`}
+          className={`px-4 py-2 font-medium border-b-2 transition whitespace-nowrap ${activeTab === "overview"
+            ? "border-blue-600 text-blue-600"
+            : "border-transparent text-gray-600 hover:text-gray-900"
+            }`}
         >
           Tổng Quan
         </button>
         <button
           onClick={() => setActiveTab("desks")}
-          className={`px-4 py-2 font-medium border-b-2 transition whitespace-nowrap ${
-            activeTab === "desks"
-              ? "border-blue-600 text-blue-600"
-              : "border-transparent text-gray-600 hover:text-gray-900"
-          }`}
+          className={`px-4 py-2 font-medium border-b-2 transition whitespace-nowrap ${activeTab === "desks"
+            ? "border-blue-600 text-blue-600"
+            : "border-transparent text-gray-600 hover:text-gray-900"
+            }`}
         >
           Quản Lý Bàn
         </button>
         <button
           onClick={() => setActiveTab("config")}
-          className={`px-4 py-2 font-medium border-b-2 transition whitespace-nowrap ${
-            activeTab === "config"
-              ? "border-blue-600 text-blue-600"
-              : "border-transparent text-gray-600 hover:text-gray-900"
-          }`}
+          className={`px-4 py-2 font-medium border-b-2 transition whitespace-nowrap ${activeTab === "config"
+            ? "border-blue-600 text-blue-600"
+            : "border-transparent text-gray-600 hover:text-gray-900"
+            }`}
         >
           Cấu Hình
         </button>
         <button
           onClick={() => setActiveTab("reports")}
-          className={`px-4 py-2 font-medium border-b-2 transition whitespace-nowrap ${
-            activeTab === "reports"
-              ? "border-blue-600 text-blue-600"
-              : "border-transparent text-gray-600 hover:text-gray-900"
-          }`}
+          className={`px-4 py-2 font-medium border-b-2 transition whitespace-nowrap ${activeTab === "reports"
+            ? "border-blue-600 text-blue-600"
+            : "border-transparent text-gray-600 hover:text-gray-900"
+            }`}
         >
           Báo Cáo Năng Lượng
         </button>
@@ -349,26 +350,59 @@ export default function AdminDashboard({ activeTab, setActiveTab }) {
                 const total = room.desks?.length || 0
                 const energy = room.desks?.reduce((sum, d) => sum + d.energyConsumedWh, 0) || 0
                 return (
-                  <div key={room.id} className="border rounded-lg p-4">
-                    <h4 className="font-bold text-gray-900 mb-2">{room.name}</h4>
-                    <div className="space-y-1 text-sm">
-                      <div className="flex justify-between">
-                        <span className="text-gray-600">Sử dụng:</span>
-                        <span className="font-medium">{occupied}/{total}</span>
+                  <div
+                    key={room.id}
+                    className="border rounded-xl p-4 bg-white shadow-sm hover:shadow-md transition"
+                  >
+                    {/* Room title */}
+                    <h4 className="font-semibold text-gray-900 mb-3">
+                      {room.name}
+                    </h4>
+
+                    {/* Usage & Energy */}
+                    <div className="space-y-2 text-sm">
+                      <div className="flex justify-between items-center">
+                        <span className="text-gray-500">Sử dụng</span>
+                        <span className="font-semibold text-gray-900">
+                          {occupied}/{total}
+                        </span>
                       </div>
-                      <div className="flex justify-between">
-                        <span className="text-gray-600">Năng lượng:</span>
-                        <span className="font-medium">{energy.toFixed(1)} Wh</span>
+
+                      <div className="flex justify-between items-center">
+                        <span className="text-gray-500">Năng lượng</span>
+                        <span className="font-semibold text-gray-900">
+                          {energy.toFixed(1)} Wh
+                        </span>
                       </div>
-                      <div className="flex items-center gap-1 text-xs text-gray-600 mt-2">
-                        <Thermometer className="w-3 h-3" />
-                        <span>{room.currentTemperature?.toFixed(1)}°C</span>
-                        <Droplets className="w-3 h-3 ml-2" />
-                        <span>{room.currentHumidity?.toFixed(1)}%</span>
+                    </div>
+
+                    {/* Divider */}
+                    <div className="h-px bg-gray-100 my-3" />
+
+                    {/* Environment */}
+                    <div className="flex gap-3">
+                      {/* Temperature */}
+                      <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-red-50 text-red-700 text-sm">
+                        <Thermometer className="w-4 h-4" />
+                        <span className="font-medium">
+                          {room.currentTemperature != null
+                            ? `${room.currentTemperature.toFixed(1)}°C`
+                            : '--'}
+                        </span>
+                      </div>
+
+                      {/* Humidity */}
+                      <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-blue-50 text-blue-700 text-sm">
+                        <Droplets className="w-4 h-4" />
+                        <span className="font-medium">
+                          {room.currentHumidity != null
+                            ? `${room.currentHumidity.toFixed(1)}%`
+                            : '--'}
+                        </span>
                       </div>
                     </div>
                   </div>
-                )
+                );
               })}
             </div>
           </div>
@@ -388,11 +422,10 @@ export default function AdminDashboard({ activeTab, setActiveTab }) {
                   <button
                     key={room.id}
                     onClick={() => setSelectedRoomId(room.id)}
-                    className={`p-3 rounded-lg transition ${
-                      selectedRoomId === room.id
-                        ? "bg-blue-600 text-white shadow-md"
-                        : "bg-gray-100 hover:bg-gray-200 text-gray-900"
-                    }`}
+                    className={`p-3 rounded-lg transition ${selectedRoomId === room.id
+                      ? "bg-blue-600 text-white shadow-md"
+                      : "bg-gray-100 hover:bg-gray-200 text-gray-900"
+                      }`}
                   >
                     <div className="font-semibold">{room.name}</div>
                     <div className="text-xs mt-1">{occupied}/{total} bàn</div>
@@ -405,9 +438,35 @@ export default function AdminDashboard({ activeTab, setActiveTab }) {
           {selectedRoom && (
             <div className="bg-white rounded-lg shadow p-6">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-bold text-gray-900">Điều Khiển Bàn - {selectedRoom.name}</h3>
-                <div className="text-sm text-gray-600">
-                  {selectedRoom.currentTemperature?.toFixed(1)}°C / {selectedRoom.currentHumidity?.toFixed(1)}%
+                {/* Title */}
+                <h3 className="text-lg font-semibold text-gray-900">
+                  Điều Khiển Bàn
+                  <span className="ml-1 text-gray-500 font-medium">
+                    – {selectedRoom.name}
+                  </span>
+                </h3>
+
+                {/* Environment */}
+                <div className="flex gap-2">
+                  {/* Temperature */}
+                  <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-red-50 text-red-700 text-sm">
+                    <Thermometer className="w-4 h-4" />
+                    <span className="font-medium">
+                      {selectedRoom.currentTemperature != null
+                        ? `${selectedRoom.currentTemperature.toFixed(1)}°C`
+                        : '--'}
+                    </span>
+                  </div>
+
+                  {/* Humidity */}
+                  <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-blue-50 text-blue-700 text-sm">
+                    <Droplets className="w-4 h-4" />
+                    <span className="font-medium">
+                      {selectedRoom.currentHumidity != null
+                        ? `${selectedRoom.currentHumidity.toFixed(1)}%`
+                        : '--'}
+                    </span>
+                  </div>
                 </div>
               </div>
 
@@ -421,11 +480,10 @@ export default function AdminDashboard({ activeTab, setActiveTab }) {
                         return (
                           <div
                             key={desk.id}
-                            className={`p-3 rounded-lg border-2 transition ${
-                              desk.occupancyStatus
-                                ? "bg-red-50 border-red-300"
-                                : "bg-green-50 border-green-300"
-                            }`}
+                            className={`p-3 rounded-lg border-2 transition ${desk.occupancyStatus
+                              ? "bg-red-50 border-red-300"
+                              : "bg-green-50 border-green-300"
+                              }`}
                           >
                             <div className="flex items-center justify-between mb-1">
                               <span className="text-xs font-semibold text-gray-700">
@@ -454,15 +512,14 @@ export default function AdminDashboard({ activeTab, setActiveTab }) {
                               <button
                                 onClick={() => handleToggleLight(desk.id)}
                                 disabled={togglingDesks.has(desk.id)}
-                                className={`flex-1 px-2 py-1 text-xs rounded transition flex items-center justify-center gap-1 ${
-                                  togglingDesks.has(desk.id)
-                                    ? "bg-gray-400 text-gray-600 cursor-not-allowed opacity-75"
-                                    : desk.lightStatus
+                                className={`flex-1 px-2 py-1 text-xs rounded transition flex items-center justify-center gap-1 ${togglingDesks.has(desk.id)
+                                  ? "bg-gray-400 text-gray-600 cursor-not-allowed opacity-75"
+                                  : desk.lightStatus
                                     ? "bg-yellow-400 text-yellow-900 hover:bg-yellow-500"
                                     : "bg-gray-300 text-gray-700 hover:bg-gray-400"
-                                }`}
+                                  }`}
                                 title={
-                                  desk.roomId === 1 && desk.row === 1 && desk.position === 1
+                                  desk.esp32DeviceId
                                     ? "Bật/Tắt ESP32 - Tắt: distanceCm=4 (ngưng hoạt động), Bật: distanceCm=30 (có thể cấu hình trong .env)"
                                     : "Bật/Tắt đèn"
                                 }
@@ -484,7 +541,7 @@ export default function AdminDashboard({ activeTab, setActiveTab }) {
                                 <Settings className="w-3 h-3" />
                               </button>
                             </div>
-                            {desk.roomId === 1 && desk.row === 1 && desk.position === 1 && (
+                            {desk.esp32DeviceId && (
                               <div className="text-xs text-blue-600 mt-1 font-semibold">🔌 ESP32 (Cảm biến thực)</div>
                             )}
                           </div>
@@ -569,72 +626,128 @@ export default function AdminDashboard({ activeTab, setActiveTab }) {
           <div className="bg-white rounded-lg shadow p-6">
             <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2">
               <Settings className="w-5 h-5" />
-              Cấu Hình ESP32 (Bàn 1, Phòng 1)
+              Cấu Hình ESP32
             </h3>
 
             <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Tần số lấy mẫu HC-SR04 (fs1)
-                </label>
-                <input
-                  type="number"
-                  value={esp32Config.fs1}
-                  onChange={(e) => setEsp32Config({ ...esp32Config, fs1: parseInt(e.target.value) })}
-                  className="w-full px-3 py-2 border rounded-lg"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Tần số lấy mẫu BH1750 (fs2)
-                </label>
-                <input
-                  type="number"
-                  value={esp32Config.fs2}
-                  onChange={(e) => setEsp32Config({ ...esp32Config, fs2: parseInt(e.target.value) })}
-                  className="w-full px-3 py-2 border rounded-lg"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Tần số lấy mẫu DHT (fs3)
-                </label>
-                <input
-                  type="number"
-                  value={esp32Config.fs3}
-                  onChange={(e) => setEsp32Config({ ...esp32Config, fs3: parseInt(e.target.value) })}
-                  className="w-full px-3 py-2 border rounded-lg"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Ngưỡng phát hiện người (cm)
-                </label>
-                <input
-                  type="number"
-                  step="0.1"
-                  value={esp32Config.distanceCm}
-                  onChange={(e) => setEsp32Config({ ...esp32Config, distanceCm: parseFloat(e.target.value) })}
-                  className="w-full px-3 py-2 border rounded-lg"
-                />
-                <p className="text-xs text-gray-500 mt-1">
-                  Bật đèn: &gt; 2000, Tắt đèn: 0
+              {/* Location Configuration */}
+              <div className="border-t pt-4">
+                <h4 className="text-md font-semibold text-gray-800 mb-3">Vị Trí ESP32</h4>
+                <div className="grid grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Phòng (Room)
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="5"
+                      value={esp32Config.room || ""}
+                      onChange={(e) => setEsp32Config({ ...esp32Config, room: e.target.value ? parseInt(e.target.value) : null })}
+                      className="w-full px-3 py-2 border rounded-lg"
+                      placeholder="1-5"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Dãy (Row)
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="4"
+                      value={esp32Config.row || ""}
+                      onChange={(e) => setEsp32Config({ ...esp32Config, row: e.target.value ? parseInt(e.target.value) : null })}
+                      className="w-full px-3 py-2 border rounded-lg"
+                      placeholder="1-4"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Bàn (Table)
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="5"
+                      value={esp32Config.table || ""}
+                      onChange={(e) => setEsp32Config({ ...esp32Config, table: e.target.value ? parseInt(e.target.value) : null })}
+                      className="w-full px-3 py-2 border rounded-lg"
+                      placeholder="1-5"
+                    />
+                  </div>
+                </div>
+                <p className="text-xs text-gray-500 mt-2">
+                  Cấu hình vị trí hiện tại của ESP32. Có thể để trống nếu chỉ cập nhật các thông số khác.
                 </p>
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Chu kỳ gửi dữ liệu (ms)
-                </label>
-                <input
-                  type="number"
-                  value={esp32Config.duration}
-                  onChange={(e) => setEsp32Config({ ...esp32Config, duration: parseInt(e.target.value) })}
-                  className="w-full px-3 py-2 border rounded-lg"
-                />
+              {/* Device Configuration */}
+              <div className="border-t pt-4">
+                <h4 className="text-md font-semibold text-gray-800 mb-3">Cấu Hình Thiết Bị</h4>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Tần số lấy mẫu HC-SR04 (fs1)
+                  </label>
+                  <input
+                    type="number"
+                    value={esp32Config.fs1}
+                    onChange={(e) => setEsp32Config({ ...esp32Config, fs1: parseInt(e.target.value) })}
+                    className="w-full px-3 py-2 border rounded-lg"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Tần số lấy mẫu BH1750 (fs2)
+                  </label>
+                  <input
+                    type="number"
+                    value={esp32Config.fs2}
+                    onChange={(e) => setEsp32Config({ ...esp32Config, fs2: parseInt(e.target.value) })}
+                    className="w-full px-3 py-2 border rounded-lg"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Tần số lấy mẫu DHT (fs3)
+                  </label>
+                  <input
+                    type="number"
+                    value={esp32Config.fs3}
+                    onChange={(e) => setEsp32Config({ ...esp32Config, fs3: parseInt(e.target.value) })}
+                    className="w-full px-3 py-2 border rounded-lg"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Ngưỡng phát hiện người (cm)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={esp32Config.distanceCm}
+                    onChange={(e) => setEsp32Config({ ...esp32Config, distanceCm: parseFloat(e.target.value) })}
+                    className="w-full px-3 py-2 border rounded-lg"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    Bật đèn: &gt; 2000, Tắt đèn: 0
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Chu kỳ gửi dữ liệu (ms)
+                  </label>
+                  <input
+                    type="number"
+                    value={esp32Config.duration}
+                    onChange={(e) => setEsp32Config({ ...esp32Config, duration: parseInt(e.target.value) })}
+                    className="w-full px-3 py-2 border rounded-lg"
+                  />
+                </div>
               </div>
 
               <button
@@ -723,21 +836,19 @@ export default function AdminDashboard({ activeTab, setActiveTab }) {
                   <span className="text-sm font-medium text-gray-700">Hiển thị:</span>
                   <button
                     onClick={() => setViewMode("byRoom")}
-                    className={`px-3 py-1 text-sm rounded transition ${
-                      viewMode === "byRoom"
-                        ? "bg-blue-500 text-white"
-                        : "bg-gray-200 text-gray-700 hover:bg-gray-300"
-                    }`}
+                    className={`px-3 py-1 text-sm rounded transition ${viewMode === "byRoom"
+                      ? "bg-blue-500 text-white"
+                      : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+                      }`}
                   >
                     Theo phòng
                   </button>
                   <button
                     onClick={() => setViewMode("total")}
-                    className={`px-3 py-1 text-sm rounded transition ${
-                      viewMode === "total"
-                        ? "bg-blue-500 text-white"
-                        : "bg-gray-200 text-gray-700 hover:bg-gray-300"
-                    }`}
+                    className={`px-3 py-1 text-sm rounded transition ${viewMode === "total"
+                      ? "bg-blue-500 text-white"
+                      : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+                      }`}
                   >
                     Tổng hợp
                   </button>

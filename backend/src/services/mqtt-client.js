@@ -63,26 +63,50 @@ export async function initMqtt() {
 
 async function handleSensorData(data) {
   try {
-    // Find the desk with ESP32 (table 1 of room 1) - ONLY this desk changes
+    // Extract location from meta data (room, row, table)
+    const meta = data.meta || {}
+    const roomNumber = meta.room
+    const row = meta.row
+    const table = meta.table
+
+    // Validate location data
+    if (!roomNumber || !row || !table) {
+      console.error("[MQTT] ❌ Missing location data in meta: room, row, table required")
+      console.error("[MQTT] Received meta:", meta)
+      return
+    }
+
+    // Find the room by roomNumber
+    const room = await prisma.studyRoom.findFirst({
+      where: { roomNumber: Number.parseInt(roomNumber) },
+    })
+
+    if (!room) {
+      console.error(`[MQTT] ❌ Room ${roomNumber} not found`)
+      return
+    }
+
+    // Find the desk by location (roomId, row, position)
     const desk = await prisma.desk.findFirst({
       where: {
-        roomId: 1,
-        row: 1,
-        position: 1,
+        roomId: room.id,
+        row: Number.parseInt(row),
+        position: Number.parseInt(table), // position in schema = table in ESP32
       },
     })
 
     if (!desk) {
-      console.error("[MQTT] ❌ ESP32 desk not found (Room 1, Row 1, Table 1)")
+      console.error(`[MQTT] ❌ Desk not found: Room ${roomNumber}, Row ${row}, Table ${table}`)
       return
     }
 
-    console.log(`[MQTT] 📡 Received data for ESP32 desk (ID: ${desk.id})`)
+    console.log(`[MQTT] 📡 Received data for ESP32 at Room ${roomNumber}, Row ${row}, Table ${table} (Desk ID: ${desk.id})`)
 
     // Process distance sensor data
     if (data.distance && data.distance.data && data.distance.data.length > 0) {
       const distanceReadings = data.distance.data
-      const avgDistance = distanceReadings.reduce((a, b) => a + b, 0) / distanceReadings.length
+      // Lấy giá trị cuối cùng của mảng thay vì tính trung bình
+      const lastDistance = distanceReadings[distanceReadings.length - 1]
       
       // Get current ESP32 config to check if hardware is disabled
       const deviceId = desk.esp32DeviceId || `ESP32-${desk.id}`
@@ -99,14 +123,17 @@ async function handleSensorData(data) {
       // Check if occupied based on threshold
       // Priority: ESP32 config > meta data > desk sensitivity > default 30
       const threshold = esp32Config?.distanceCm || data.meta?.distanceCm || desk.distanceSensitivity || 30
-      const isOccupied = threshold > 0 && avgDistance < threshold && avgDistance > 0
+      const isOccupied = threshold > 0 && lastDistance < threshold && lastDistance > 0
 
-      // Save sensor reading
+      // Save sensor reading with location info
       await prisma.sensorReading.create({
         data: {
           deskId: desk.id,
-          distanceCm: avgDistance,
+          distanceCm: lastDistance,
           occupied: isOccupied,
+          room: roomNumber,
+          row: Number.parseInt(row),
+          table: Number.parseInt(table),
         },
       })
 
@@ -121,7 +148,7 @@ async function handleSensorData(data) {
             occupancyStatus: true,
             occupancyStartTime: now,
             lightStatus: true, // Auto turn on light
-            lastSensorReading: avgDistance,
+            lastSensorReading: lastDistance,
             sensorReadingTime: now,
           },
         })
@@ -136,13 +163,16 @@ async function handleSensorData(data) {
           const energyWh = (desk.lampPowerW * usageMinutes) / 60
           const totalEnergy = desk.energyConsumedWh + energyWh
           
-          // Save energy record
+          // Save energy record with location info
           await prisma.energyRecord.create({
             data: {
               deskId: desk.id,
               powerW: desk.lampPowerW,
               durationMinutes: usageMinutes,
               energyWh: energyWh,
+              room: roomNumber,
+              row: Number.parseInt(row),
+              table: Number.parseInt(table),
             },
           })
           
@@ -154,7 +184,7 @@ async function handleSensorData(data) {
               lightStatus: false,
               totalUsageMinutes: totalUsage,
               energyConsumedWh: totalEnergy,
-              lastSensorReading: avgDistance,
+              lastSensorReading: lastDistance,
               sensorReadingTime: now,
             },
           })
@@ -165,7 +195,7 @@ async function handleSensorData(data) {
         await prisma.desk.update({
           where: { id: desk.id },
           data: {
-            lastSensorReading: avgDistance,
+            lastSensorReading: lastDistance,
             sensorReadingTime: now,
           },
         })
@@ -174,18 +204,19 @@ async function handleSensorData(data) {
 
     // Process DHT sensor data (temperature & humidity)
     if (data.dht && data.dht.temperature && data.dht.temperature.length > 0) {
-      const avgTemp = data.dht.temperature.reduce((a, b) => a + b, 0) / data.dht.temperature.length
-      const avgHumidity = data.dht.humidity.reduce((a, b) => a + b, 0) / data.dht.humidity.length
+      // Lấy giá trị cuối cùng của mảng thay vì tính trung bình
+      const lastTemp = data.dht.temperature[data.dht.temperature.length - 1]
+      const lastHumidity = data.dht.humidity[data.dht.humidity.length - 1]
 
-      // Save DHT reading for the room
+      // Save DHT reading for the room (use room from meta, not desk.roomId)
       await prisma.dHT.create({
         data: {
-          roomId: desk.roomId,
-          temperature: avgTemp,
-          humidity: avgHumidity,
+          roomId: room.id,
+          temperature: lastTemp,
+          humidity: lastHumidity,
         },
       })
-      console.log(`[MQTT] 📊 Room ${desk.roomId}: ${avgTemp.toFixed(1)}°C, ${avgHumidity.toFixed(1)}%`)
+      console.log(`[MQTT] 📊 Room ${roomNumber}: ${lastTemp.toFixed(1)}°C, ${lastHumidity.toFixed(1)}%`)
     }
   } catch (error) {
     console.error("[MQTT] ❌ Error handling sensor data:", error)
@@ -203,6 +234,17 @@ export async function publishConfig(config) {
     fs3: config.fs3 || 1,
     distanceCm: config.distanceCm || 30,
     duration: config.duration || 4000,
+  }
+
+  // Include location if provided
+  if (config.room !== undefined) {
+    configMessage.room = config.room
+  }
+  if (config.row !== undefined) {
+    configMessage.row = config.row
+  }
+  if (config.table !== undefined) {
+    configMessage.table = config.table
   }
 
   mqttClient.publish(

@@ -21,7 +21,7 @@ initMqtt().catch((err) => {
 })
 
 // Start mock data service for DHT only (desk occupancy is fixed)
-// Only ESP32 desk (Room 1, Row 1, Table 1) will change via MQTT
+// ESP32 desk (identified by esp32DeviceId) will change via MQTT
 startMockDataService(10000) // Generate DHT data every 10 seconds
 
 // Middleware

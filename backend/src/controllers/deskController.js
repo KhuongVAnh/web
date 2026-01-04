@@ -65,7 +65,7 @@ export const toggleLight = async (req, res) => {
       return res.status(404).json({ message: "Desk not found" })
     }
 
-    const isESP32Desk = desk.roomId === 1 && desk.row === 1 && desk.position === 1
+    const isESP32Desk = desk.esp32DeviceId !== null
     const newLightStatus = !desk.lightStatus
 
     // Update desk status

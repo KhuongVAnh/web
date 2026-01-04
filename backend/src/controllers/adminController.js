@@ -77,47 +77,85 @@ export const getEnergyReport = async (req, res) => {
 
 export const updateESP32Config = async (req, res) => {
   try {
-    const { fs1, fs2, fs3, distanceCm, duration } = req.body
+    const { fs1, fs2, fs3, distanceCm, duration, room, row, table, deviceId } = req.body
 
-    // Find ESP32 desk (table 1 of room 1)
-    const esp32Desk = await prisma.desk.findFirst({
-      where: {
-        roomId: 1,
-        row: 1,
-        position: 1,
-      },
-    })
+    // If deviceId is provided, use it; otherwise find ESP32 desk by location
+    let esp32Desk = null
+    let targetDeviceId = deviceId
 
-    if (!esp32Desk) {
-      return res.status(404).json({ message: "ESP32 desk not found" })
+    if (deviceId) {
+      // Find desk by deviceId
+      esp32Desk = await prisma.desk.findFirst({
+        where: { esp32DeviceId: deviceId },
+      })
+      if (!esp32Desk) {
+        return res.status(404).json({ message: `ESP32 device with ID ${deviceId} not found` })
+      }
+      targetDeviceId = deviceId
+    } else if (room && row && table) {
+      // Find desk by location
+      const targetRoom = await prisma.studyRoom.findFirst({
+        where: { roomNumber: Number.parseInt(room) },
+      })
+      if (!targetRoom) {
+        return res.status(404).json({ message: `Room ${room} not found` })
+      }
+
+      esp32Desk = await prisma.desk.findFirst({
+        where: {
+          roomId: targetRoom.id,
+          row: Number.parseInt(row),
+          position: Number.parseInt(table),
+        },
+      })
+
+      if (!esp32Desk) {
+        return res.status(404).json({ message: `Desk not found: Room ${room}, Row ${row}, Table ${table}` })
+      }
+
+      targetDeviceId = esp32Desk.esp32DeviceId || `ESP32-${esp32Desk.id}`
+    } else {
+      return res.status(400).json({ message: "Either deviceId or (room, row, table) must be provided" })
     }
 
+    // Prepare update data
+    const updateData = {
+      fs1: fs1 !== undefined ? fs1 : undefined,
+      fs2: fs2 !== undefined ? fs2 : undefined,
+      fs3: fs3 !== undefined ? fs3 : undefined,
+      distanceCm: distanceCm !== undefined ? distanceCm : undefined,
+      duration: duration !== undefined ? duration : undefined,
+      lastSync: new Date(),
+    }
+
+    // Add location if provided
+    if (room !== undefined) updateData.room = Number.parseInt(room)
+    if (row !== undefined) updateData.row = Number.parseInt(row)
+    if (table !== undefined) updateData.table = Number.parseInt(table)
+
+    // Remove undefined values
+    Object.keys(updateData).forEach(key => updateData[key] === undefined && delete updateData[key])
+
     // Update or create ESP32 config
-    const deviceId = esp32Desk.esp32DeviceId || `ESP32-${esp32Desk.id}`
-    
     const config = await prisma.eSP32Config.upsert({
-      where: { deviceId },
-      update: {
-        fs1: fs1 || 3,
-        fs2: fs2 || 2,
-        fs3: fs3 || 1,
-        distanceCm: distanceCm || 30,
-        duration: duration || 4000,
-        lastSync: new Date(),
-      },
+      where: { deviceId: targetDeviceId },
+      update: updateData,
       create: {
-        deviceId,
+        deviceId: targetDeviceId,
         fs1: fs1 || 3,
         fs2: fs2 || 2,
         fs3: fs3 || 1,
         distanceCm: distanceCm || 30,
         duration: duration || 4000,
+        room: room ? Number.parseInt(room) : null,
+        row: row ? Number.parseInt(row) : null,
+        table: table ? Number.parseInt(table) : null,
         lastSync: new Date(),
       },
     })
 
     // Update desk distance sensitivity if provided
-    if (distanceCm !== undefined) {
+    if (distanceCm !== undefined && esp32Desk) {
       await prisma.desk.update({
         where: { id: esp32Desk.id },
         data: { 
@@ -132,13 +170,16 @@ export const updateESP32Config = async (req, res) => {
       })
     }
 
-    // Publish config to MQTT
+    // Publish config to MQTT (include location if provided)
     await publishConfig({
       fs1: config.fs1,
       fs2: config.fs2,
       fs3: config.fs3,
       distanceCm: config.distanceCm,
       duration: config.duration,
+      room: config.room,
+      row: config.row,
+      table: config.table,
     })
 
     res.json(config)

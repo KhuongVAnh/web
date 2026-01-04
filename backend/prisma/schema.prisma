@@ -61,7 +61,7 @@ model Desk {
   lastSensorReading Float? // Last distance reading
   sensorReadingTime DateTime?
   
-  // ESP32 device ID (only table 1 of room 1 has ESP32)
+  // ESP32 device ID (ESP32 can be moved to any desk)
   esp32DeviceId   String? @unique
   
   sensorReadings  SensorReading[]
@@ -80,9 +80,14 @@ model SensorReading {
   desk        Desk    @relation(fields: [deskId], references: [id], onDelete: Cascade)
   distanceCm  Float   // Distance reading from HC-SR04
   occupied    Boolean
+  // Location at time of measurement (from ESP32 meta data)
+  room        Int?    // Room number at time of measurement
+  row         Int?    // Row number at time of measurement
+  table       Int?    // Table number at time of measurement
   createdAt   DateTime @default(now())
 
   @@index([deskId, createdAt])
+  @@index([room, row, table, createdAt])
 }
 
 model DHT {
@@ -103,9 +108,14 @@ model EnergyRecord {
   powerW          Float   // Power in watts
   durationMinutes Int     // Duration of usage
   energyWh        Float   // Energy in watt-hours
+  // Location at time of energy session (from ESP32 meta data)
+  room            Int?    // Room number at time of session
+  row             Int?    // Row number at time of session
+  table           Int?    // Table number at time of session
   createdAt       DateTime @default(now())
 
   @@index([deskId, createdAt])
+  @@index([room, row, table, createdAt])
 }
 
 model ESP32Config {
@@ -123,9 +133,15 @@ model ESP32Config {
   // Data transmission duration
   duration  Int       @default(4000)    // in milliseconds
   
+  // Current location (can be updated via MQTT)
+  room      Int?      // Current room number
+  row       Int?       // Current row number
+  table     Int?       // Current table number
+  
   lastSync  DateTime?
   
   @@index([deviceId])
+  @@index([room, row, table])
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
 }
