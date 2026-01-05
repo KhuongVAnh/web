@@ -132,7 +132,7 @@ async function handleSensorData(topic, data) {
       const threshold = esp32Config?.distanceCm || data.meta?.distanceCm || desk.distanceSensitivity || 30
       const isOccupied =
         threshold > 0 &&
-        distanceReadings.some(value => value < threshold)
+        (distanceReadings.some(value => value < threshold) || distanceReadings.every(value => value > 1200))
 
       const roomNum = Number.parseInt(roomNumber)
       const rowNum = Number.parseInt(row)

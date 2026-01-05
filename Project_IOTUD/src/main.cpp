@@ -595,7 +595,7 @@
 //       if ((currentTime - lastTime1) >= period1_ms)
 //       {
 //         float dist = readDistance();
-//         bool currentTriggered = (local_distanceCm > 4) && ((dist < local_distanceCm) || (dist > 1200));
+//         bool currentTriggered = (local_distanceCm > 4) && ((dist < local_distanceCm));
 
 //         // Kiểm tra thay đổi trạng thái
 //         if (currentTriggered != previousTriggeredState)

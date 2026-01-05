@@ -8,8 +8,8 @@
 #include <ArduinoJson.h>
 
 // ========== WiFi ==========
-const char *WIFI_SSID = "Nhan Home";
-const char *WIFI_PASSWORD = "nhanhome";
+const char *WIFI_SSID = "Vankkk";
+const char *WIFI_PASSWORD = "vanhhhhh";
 
 // ========== MQTT HiveMQ Cloud ==========
 const char *MQTT_BROKER = "5b91e3ce790f41e78062533f58758704.s1.eu.hivemq.cloud";
@@ -42,15 +42,15 @@ const int ledcFreq = 5000;    // Tần số PWM 5kHz
 const int ledcResolution = 8; // Độ phân giải 8 bit (0-255)
 
 // ========== Tham số hệ thống ==========
-volatile unsigned long measurementDurationMs = 10000; // Thời gian đo (ms), tối đa 10s, có thể điều chỉnh qua MQTT
-volatile float fs1 = 3;                               // Tần số lấy mẫu HCSR04 (Hz)
-volatile float fs2 = 2;                               // Tần số lấy mẫu BH1750 (Hz)
-volatile float fs3 = 1;                               // Tần số lấy mẫu DHT (Hz), tối đa 2.5 Hz
-volatile int distanceCm = 30;                         // Ngưỡng khoảng cách (cm)
-volatile int room = 2;                                // Định danh phòng
-volatile int row = 1;                                 // Định danh hàng
-volatile int table = 2;                               // Định danh bàn
-volatile bool lightOn = false;                        // Bật/tắt đèn cưỡng bức (true: luôn bật, false: luôn tắt)
+volatile unsigned long measurementDurationMs = 4000; // Thời gian đo (ms), tối đa 10s, có thể điều chỉnh qua MQTT
+volatile float fs1 = 3;                              // Tần số lấy mẫu HCSR04 (Hz)
+volatile float fs2 = 2;                              // Tần số lấy mẫu BH1750 (Hz)
+volatile float fs3 = 1;                              // Tần số lấy mẫu DHT (Hz), tối đa 2.5 Hz
+volatile int distanceCm = 60;                        // Ngưỡng khoảng cách (cm)
+volatile int room = 2;                               // Định danh phòng
+volatile int row = 1;                                // Định danh hàng
+volatile int table = 2;                              // Định danh bàn
+volatile bool lightOn = false;                       // Bật/tắt đèn cưỡng bức (true: luôn bật, false: luôn tắt)
 
 // ========== Mảng dữ liệu đo ==========
 float *distanceArray = nullptr;
@@ -170,28 +170,28 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
                 configChanged = true;
             }
         }
-    if (doc.containsKey("distanceCm"))
-    {
-      int new_distanceCm = doc["distanceCm"].as<int>();
-      if (new_distanceCm > 0 && new_distanceCm != distanceCm)
-      {
-        distanceCm = new_distanceCm;
-        Serial.println("Cap nhat distanceCm = " + String(distanceCm));
-        configChanged = true;
-      }
-    }
-    // Bật/tắt đèn cưỡng bức (giống cách xử lý distanceCm)
-    if (doc.containsKey("lightOn"))
-    {
-      bool new_lightOn = doc["lightOn"].as<bool>();
-      if (new_lightOn != lightOn)
-      {
-        lightOn = new_lightOn;
-        Serial.println("Cap nhat lightOn = " + String(lightOn ? "true" : "false"));
-        configChanged = true;
-      }
-    }
-    if (doc.containsKey("duration"))
+        if (doc.containsKey("distanceCm"))
+        {
+            int new_distanceCm = doc["distanceCm"].as<int>();
+            if (new_distanceCm > 0 && new_distanceCm != distanceCm)
+            {
+                distanceCm = new_distanceCm;
+                Serial.println("Cap nhat distanceCm = " + String(distanceCm));
+                configChanged = true;
+            }
+        }
+        // Bật/tắt đèn cưỡng bức (giống cách xử lý distanceCm)
+        if (doc.containsKey("lightOn"))
+        {
+            bool new_lightOn = doc["lightOn"].as<bool>();
+            if (new_lightOn != lightOn)
+            {
+                lightOn = new_lightOn;
+                Serial.println("Cap nhat lightOn = " + String(lightOn ? "true" : "false"));
+                configChanged = true;
+            }
+        }
+        if (doc.containsKey("duration"))
         {
             unsigned long new_duration = doc["duration"].as<unsigned long>();
             if (new_duration < 1000)
@@ -492,6 +492,8 @@ void measurementTask(void *parameter)
 {
     Serial.println("Luong do du lieu va gui MQTT bat dau...");
 
+    bool previousTriggeredState = false; // Trạng thái kích hoạt trước đó
+
     while (true)
     {
         float local_fs1, local_fs2, local_fs3;
@@ -543,6 +545,7 @@ void measurementTask(void *parameter)
         unsigned long lastTime1 = 0;
         unsigned long lastTime2 = 0;
         unsigned long lastTime3 = 0;
+        bool stateChanged = false;
 
         while ((millis() - startTime) < local_duration)
         {
@@ -558,6 +561,17 @@ void measurementTask(void *parameter)
             if ((currentTime - lastTime1) >= period1_ms)
             {
                 float dist = readDistance();
+
+                bool currentTriggered = (local_distanceCm > 4) && ((dist < local_distanceCm) || (dist>1200));
+
+                // Kiểm tra thay đổi trạng thái
+                if (currentTriggered != previousTriggeredState)
+                {
+                    stateChanged = true;
+                    previousTriggeredState = currentTriggered;
+                    Serial.println("Phat hien thay doi trang thai: " + String(currentTriggered ? "Kich hoat" : "Khong kich hoat"));
+                }
+
                 if (distanceCount < distanceArraySize)
                 {
                     distanceArray[distanceCount++] = dist;
@@ -565,7 +579,7 @@ void measurementTask(void *parameter)
                 lastTime1 = currentTime;
             }
 
-            if (!local_lightOn)
+            if (!local_lightOn || local_distanceCm <=4)
             {
                 ledcWrite(ledcChannel, 0); // Tắt đèn cưỡng bức
             }
@@ -605,6 +619,14 @@ void measurementTask(void *parameter)
                     humidityArray[humidityCount++] = humi;
                 }
                 lastTime3 = currentTime;
+            }
+
+            // Nếu có thay đổi trạng thái, gửi ngay lập tức với QoS 1
+            if (stateChanged)
+            {
+                Serial.println("Gui ngay lap tuc do thay doi trang thai (QoS 1)...");
+                sendDataToMQTT(1);
+                stateChanged = false;
             }
 
             vTaskDelay(pdMS_TO_TICKS(100));

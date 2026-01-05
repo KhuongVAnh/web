@@ -118,6 +118,7 @@ export const toggleLight = async (req, res) => {
           room: desk.room?.roomNumber,
           row: desk.row,
           table: desk.position,
+          lightOn: false,
         })
 
         await prisma.eSP32Config.update({
