@@ -1,6 +1,6 @@
 # Branch này là viết tiếp từ branch only_mqtt
 # Hệ Thống Quản Lý Bàn Học Thư Viện
-
+# note: Đã chạy ổn định từ commit "fix logic detect"
 Hệ thống phần mềm quản lý chỗ ngồi bàn học trong thư viện với khả năng giám sát trạng thái sử dụng bàn học theo thời gian thực, điều khiển thiết bị (đèn bàn), và tính toán điện năng tiêu thụ.
 
 ## 🚀 Cài Đặt Nhanh
