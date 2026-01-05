@@ -6,6 +6,17 @@
 #include <PubSubClient.h>
 #include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
+#include <cstring>
+
+// Chương trình ESP32 đọc cảm biến (HC-SR04, BH1750, DHT), lưu dữ liệu vào đệm cố định (pre-allocate một lần),
+// phát hiện thay đổi trạng thái (khoảng cách) để gửi MQTT ngay lập tức, và gửi theo chu kỳ với QoS tùy cấu hình.
+// Các biến trạng thái chính:
+// - previousTriggeredState: trạng thái bàn học lần trước (dựa trên khoảng cách) để phát hiện đổi trạng thái.
+// - stateChanged: bật khi giá trị hiện tại khác previousTriggeredState; gửi MQTT ngay với các mẫu đã đo đến thời điểm đó.
+// - shouldRestartMeasurement: được MQTT config đặt khi có thay đổi cấu hình; measurementTask kiểm tra và dừng chu kỳ hiện tại.
+// - restartRequested: cờ nội bộ measurementTask, true khi shouldRestartMeasurement được phát hiện, để bỏ gửi cuối chu kỳ.
+// - distanceCount/luxCount/temperatureCount/humidityCount: số mẫu đã ghi trong đệm cố định; sendDataToMQTT chỉ serialize đến các count này.
+// Sau mỗi lần gửi chỉ reset đệm/counters để tránh phân mảnh bộ nhớ.
 
 // ========== WiFi ==========
 const char *WIFI_SSID = "Vankkk";
@@ -41,8 +52,12 @@ const int ledcChannel = 0;
 const int ledcFreq = 5000;    // Tần số PWM 5kHz
 const int ledcResolution = 8; // Độ phân giải 8 bit (0-255)
 
+const float FS_MAX = 10.0f;
+const unsigned long DURATION_MAX_MS = 60000;
+const size_t MAX_SAMPLES = (size_t)(FS_MAX * (DURATION_MAX_MS / 1000.0f)) + 1;
+
 // ========== Tham số hệ thống ==========
-volatile unsigned long measurementDurationMs = 4000; // Thời gian đo (ms), tối đa 10s, có thể điều chỉnh qua MQTT
+volatile unsigned long measurementDurationMs = 4000; // Thời gian đo (ms), tối đa 60s, có thể điều chỉnh qua MQTT
 volatile float fs1 = 3;                              // Tần số lấy mẫu HCSR04 (Hz)
 volatile float fs2 = 2;                              // Tần số lấy mẫu BH1750 (Hz)
 volatile float fs3 = 1;                              // Tần số lấy mẫu DHT (Hz), tối đa 2.5 Hz
@@ -58,23 +73,25 @@ float *luxArray = nullptr;
 float *temperatureArray = nullptr;
 float *humidityArray = nullptr;
 
-size_t distanceArraySize = 0;
+size_t distanceArraySize = MAX_SAMPLES;
 size_t distanceCount = 0;
-size_t luxArraySize = 0;
+size_t luxArraySize = MAX_SAMPLES;
 size_t luxCount = 0;
-size_t temperatureArraySize = 0;
+size_t temperatureArraySize = MAX_SAMPLES;
 size_t temperatureCount = 0;
-size_t humidityArraySize = 0;
+size_t humidityArraySize = MAX_SAMPLES;
 size_t humidityCount = 0;
 
 // Flags
 volatile bool shouldRestartMeasurement = false;
 SemaphoreHandle_t configMutex;
 SemaphoreHandle_t mqttMutex;
+bool buffersInitialized = false;
 
 // ====================================================================
 // KẾT NỐI WIFI
 // ====================================================================
+// Kết nối WiFi, chờ đến khi thành công và in ra địa chỉ IP.
 void connectWiFi()
 {
     Serial.print("Dang ket noi WiFi...");
@@ -92,6 +109,7 @@ void connectWiFi()
 // ====================================================================
 // KẾT NỐI MQTT
 // ====================================================================
+// Kết nối MQTT broker, subscribe topic cấu hình, retry khi lỗi.
 void connectMQTT()
 {
     while (!client.connected())
@@ -115,6 +133,7 @@ void connectMQTT()
 // ====================================================================
 // CALLBACK MQTT - Xử lý lệnh từ broker
 // ====================================================================
+// Parse JSON cấu hình, cập nhật tham số đo và bật cờ shouldRestartMeasurement khi có thay đổi.
 void mqttCallback(char *topic, byte *payload, unsigned int length)
 {
     char message[length + 1];
@@ -235,6 +254,7 @@ void mqttCallback(char *topic, byte *payload, unsigned int length)
 // ====================================================================
 // Đọc khoảng cách từ HC-SR04
 // ====================================================================
+// Phát xung, đo thời gian phản hồi và đổi ra cm.
 float readDistance()
 {
     digitalWrite(trigPin, LOW);
@@ -249,6 +269,7 @@ float readDistance()
 // ====================================================================
 // Giải phóng tất cả mảng
 // ====================================================================
+// Free mọi đệm và reset kích thước/cờ khởi tạo.
 void freeAllArrays()
 {
     if (distanceArray != nullptr)
@@ -272,15 +293,17 @@ void freeAllArrays()
         humidityArray = nullptr;
     }
 
-    distanceArraySize = 0;
-    luxArraySize = 0;
-    temperatureArraySize = 0;
-    humidityArraySize = 0;
+    distanceArraySize = MAX_SAMPLES;
+    luxArraySize = MAX_SAMPLES;
+    temperatureArraySize = MAX_SAMPLES;
+    humidityArraySize = MAX_SAMPLES;
+    buffersInitialized = false;
 }
 
 // ====================================================================
 // Reset index về 0
 // ====================================================================
+// Đặt lại counters của đệm về 0.
 void resetCounters()
 {
     distanceCount = 0;
@@ -290,71 +313,61 @@ void resetCounters()
 }
 
 // ====================================================================
-// Cấp phát mảng nếu cần
+// Khởi tạo bộ đệm cố định một lần
 // ====================================================================
-bool allocateArraysIfNeeded(size_t size1, size_t size2, size_t size3)
+// Cấp phát 4 đệm theo MAX_SAMPLES, đặt buffersInitialized; freeAll nếu lỗi.
+bool initBuffersOnce()
 {
-    bool needRealloc = false;
-
-    if (distanceArraySize != size1)
+    if (buffersInitialized)
     {
-        if (distanceArray != nullptr)
-        {
-            free(distanceArray);
-        }
-        distanceArray = (float *)malloc(size1 * sizeof(float));
-        if (distanceArray == nullptr)
-            return false;
-        distanceArraySize = size1;
-        needRealloc = true;
+        return true;
     }
 
-    if (luxArraySize != size2)
+    distanceArray = (float *)malloc(distanceArraySize * sizeof(float));
+    luxArray = (float *)malloc(luxArraySize * sizeof(float));
+    temperatureArray = (float *)malloc(temperatureArraySize * sizeof(float));
+    humidityArray = (float *)malloc(humidityArraySize * sizeof(float));
+
+    if (!distanceArray || !luxArray || !temperatureArray || !humidityArray)
     {
-        if (luxArray != nullptr)
-        {
-            free(luxArray);
-        }
-        luxArray = (float *)malloc(size2 * sizeof(float));
-        if (luxArray == nullptr)
-            return false;
-        luxArraySize = size2;
-        needRealloc = true;
+        Serial.println("LOI: Khong the cap phat bo nho co dinh!");
+        freeAllArrays();
+        return false;
     }
 
-    if (temperatureArraySize != size3)
-    {
-        if (temperatureArray != nullptr)
-        {
-            free(temperatureArray);
-        }
-        temperatureArray = (float *)malloc(size3 * sizeof(float));
-        if (temperatureArray == nullptr)
-            return false;
-        temperatureArraySize = size3;
-        needRealloc = true;
-    }
-
-    if (humidityArraySize != size3)
-    {
-        if (humidityArray != nullptr)
-        {
-            free(humidityArray);
-        }
-        humidityArray = (float *)malloc(size3 * sizeof(float));
-        if (humidityArray == nullptr)
-            return false;
-        humidityArraySize = size3;
-        needRealloc = true;
-    }
-
+    buffersInitialized = true;
     return true;
+}
+
+// ====================================================================
+// Xóa dữ liệu đã dùng trong đệm (không giải phóng)
+// ====================================================================
+// Ghi 0 vào phần dữ liệu đã sử dụng theo các count đầu vào.
+void clearUsedBuffers(size_t dCount, size_t lCount, size_t tCount, size_t hCount)
+{
+    if (distanceArray && dCount > 0)
+    {
+        memset(distanceArray, 0, dCount * sizeof(float));
+    }
+    if (luxArray && lCount > 0)
+    {
+        memset(luxArray, 0, lCount * sizeof(float));
+    }
+    if (temperatureArray && tCount > 0)
+    {
+        memset(temperatureArray, 0, tCount * sizeof(float));
+    }
+    if (humidityArray && hCount > 0)
+    {
+        memset(humidityArray, 0, hCount * sizeof(float));
+    }
 }
 
 // ====================================================================
 // Gửi dữ liệu lên MQTT broker
 // ====================================================================
-void sendDataToMQTT(int qos = 0)
+// Serialize dữ liệu từ đệm đến số mẫu được truyền vào, publish với QoS lựa chọn.
+void sendDataToMQTT(size_t dCount, size_t lCount, size_t tCount, size_t hCount, int qos = 0)
 {
     if (xSemaphoreTake(mqttMutex, pdMS_TO_TICKS(5000)) == pdTRUE)
     {
@@ -385,7 +398,7 @@ void sendDataToMQTT(int qos = 0)
 
         Serial.println("Bat dau gui du lieu len broker (QoS=" + String(qos) + ")...");
 
-        size_t estimatedSize = (distanceCount + luxCount + temperatureCount + humidityCount) * 15 + 500;
+        size_t estimatedSize = (dCount + lCount + tCount + hCount) * 15 + 500;
         DynamicJsonDocument doc(estimatedSize < 4096 ? 4096 : estimatedSize);
 
         JsonObject distanceObj = doc.createNestedObject("distance");
@@ -393,18 +406,18 @@ void sendDataToMQTT(int qos = 0)
         JsonArray distanceData = distanceObj.createNestedArray("data");
         if (distanceArray != nullptr)
         {
-            for (size_t i = 0; i < distanceCount; i++)
+            for (size_t i = 0; i < dCount; i++)
             {
                 distanceData.add(distanceArray[i]);
             }
         }
 
-        if (luxCount > 0 && luxArray != nullptr)
+        if (lCount > 0 && luxArray != nullptr)
         {
             JsonObject luxObj = doc.createNestedObject("lux");
             luxObj["fs"] = local_fs2;
             JsonArray luxData = luxObj.createNestedArray("data");
-            for (size_t i = 0; i < luxCount; i++)
+            for (size_t i = 0; i < lCount; i++)
             {
                 luxData.add(luxArray[i]);
             }
@@ -416,7 +429,7 @@ void sendDataToMQTT(int qos = 0)
         JsonArray tempData = dhtObj.createNestedArray("temperature");
         if (temperatureArray != nullptr)
         {
-            for (size_t i = 0; i < temperatureCount; i++)
+            for (size_t i = 0; i < tCount; i++)
             {
                 tempData.add(temperatureArray[i]);
             }
@@ -425,7 +438,7 @@ void sendDataToMQTT(int qos = 0)
         JsonArray humiData = dhtObj.createNestedArray("humidity");
         if (humidityArray != nullptr)
         {
-            for (size_t i = 0; i < humidityCount; i++)
+            for (size_t i = 0; i < hCount; i++)
             {
                 humiData.add(humidityArray[i]);
             }
@@ -488,11 +501,19 @@ void sendDataToMQTT(int qos = 0)
 // ====================================================================
 // LUỒNG 1: Đo dữ liệu và gửi MQTT
 // ====================================================================
+// Vòng lặp đo theo fs1/fs2/fs3, lưu vào đệm cố định, 
+// phát hiện stateChanged từ cảm biến khoảng cách để gửi ngay; gửi chu kỳ khi hết duration trừ khi restartRequested.
 void measurementTask(void *parameter)
 {
     Serial.println("Luong do du lieu va gui MQTT bat dau...");
 
     bool previousTriggeredState = false; // Trạng thái kích hoạt trước đó
+
+    if (!initBuffersOnce())
+    {
+        Serial.println("Dung measurementTask vi khong co bo dem hop le");
+        vTaskDelay(portMAX_DELAY);
+    }
 
     while (true)
     {
@@ -518,19 +539,7 @@ void measurementTask(void *parameter)
             Serial.println("Canh bao: fs3 da duoc gioi han ve 2.5 Hz trong measurementTask");
         }
 
-        float durationSeconds = local_duration / 1000.0;
-        size_t size1 = (local_fs1 > 0) ? (size_t)(local_fs1 * durationSeconds) + 1 : 1;
-        size_t size2 = (local_fs2 > 0) ? (size_t)(local_fs2 * durationSeconds) + 1 : 1;
-        size_t size3 = (local_fs3 > 0) ? (size_t)(local_fs3 * durationSeconds) + 1 : 1;
-
         Serial.println("Cau hinh: fs1=" + String(local_fs1) + "Hz, fs2=" + String(local_fs2) + "Hz, fs3=" + String(local_fs3) + "Hz");
-
-        if (!allocateArraysIfNeeded(size1, size2, size3))
-        {
-            Serial.println("LOI: Khong the cap phat bo nho!");
-            vTaskDelay(pdMS_TO_TICKS(1000));
-            continue;
-        }
 
         resetCounters();
         shouldRestartMeasurement = false;
@@ -546,12 +555,14 @@ void measurementTask(void *parameter)
         unsigned long lastTime2 = 0;
         unsigned long lastTime3 = 0;
         bool stateChanged = false;
+        bool restartRequested = false;
 
         while ((millis() - startTime) < local_duration)
         {
             if (shouldRestartMeasurement)
             {
                 Serial.println("Co thay doi cau hinh, dung do va bat dau lai...");
+                restartRequested = true;
                 shouldRestartMeasurement = false;
                 break;
             }
@@ -576,6 +587,10 @@ void measurementTask(void *parameter)
                 {
                     distanceArray[distanceCount++] = dist;
                 }
+                else
+                {
+                    Serial.println("Canh bao: Bo dem distance day, bo qua mau");
+                }
                 lastTime1 = currentTime;
             }
 
@@ -589,6 +604,10 @@ void measurementTask(void *parameter)
                 if (luxCount < luxArraySize)
                 {
                     luxArray[luxCount++] = lux;
+                }
+                else
+                {
+                    Serial.println("Canh bao: Bo dem lux day, bo qua mau");
                 }
 
                 int duty = (int)(255 - 255 * lux / 200);
@@ -614,9 +633,17 @@ void measurementTask(void *parameter)
                 {
                     temperatureArray[temperatureCount++] = temp;
                 }
+                else
+                {
+                    Serial.println("Canh bao: Bo dem temperature day, bo qua mau");
+                }
                 if (humidityCount < humidityArraySize)
                 {
                     humidityArray[humidityCount++] = humi;
+                }
+                else
+                {
+                    Serial.println("Canh bao: Bo dem humidity day, bo qua mau");
                 }
                 lastTime3 = currentTime;
             }
@@ -625,14 +652,18 @@ void measurementTask(void *parameter)
             if (stateChanged)
             {
                 Serial.println("Gui ngay lap tuc do thay doi trang thai (QoS 1)...");
-                sendDataToMQTT(1);
+                sendDataToMQTT(distanceCount, luxCount, temperatureCount, humidityCount, 1);
+                clearUsedBuffers(distanceCount, luxCount, temperatureCount, humidityCount);
+                resetCounters();
                 stateChanged = false;
+                restartRequested = true; // bắt đầu chu kỳ đo mới sau khi gửi ngay
+                break;
             }
 
             vTaskDelay(pdMS_TO_TICKS(100));
         }
 
-        if (!shouldRestartMeasurement)
+        if (!restartRequested)
         {
             Serial.println("Ket thuc do du lieu:");
             Serial.println("  Distance: " + String(distanceCount));
@@ -642,7 +673,14 @@ void measurementTask(void *parameter)
 
             int qos = local_lightOn ? 1 : 0;
             Serial.println("Gui du lieu theo chu ky (QoS " + String(qos) + ")...");
-            sendDataToMQTT(qos);
+            sendDataToMQTT(distanceCount, luxCount, temperatureCount, humidityCount, qos);
+            clearUsedBuffers(distanceCount, luxCount, temperatureCount, humidityCount);
+            resetCounters();
+        }
+        else
+        {
+            clearUsedBuffers(distanceCount, luxCount, temperatureCount, humidityCount);
+            resetCounters();
         }
 
         vTaskDelay(pdMS_TO_TICKS(100));
@@ -652,6 +690,7 @@ void measurementTask(void *parameter)
 // ====================================================================
 // LUỒNG 2: Lắng nghe sự kiện MQTT
 // ====================================================================
+// Vòng lặp duy trì kết nối MQTT và xử lý client.loop() an toàn mutex.
 void mqttListenerTask(void *parameter)
 {
     Serial.println("Luong lang nghe MQTT bat dau...");
@@ -674,6 +713,7 @@ void mqttListenerTask(void *parameter)
 // ====================================================================
 // SETUP
 // ====================================================================
+// Khởi tạo serial, cảm biến, PWM, WiFi/MQTT, mutex, bộ đệm và tạo các task.
 void setup()
 {
     Serial.begin(9600);
@@ -715,6 +755,13 @@ void setup()
             delay(1000);
     }
 
+    if (!initBuffersOnce())
+    {
+        Serial.println("LOI: Khong the khoi tao bo dem, dung chuong trinh");
+        while (1)
+            delay(1000);
+    }
+
     xTaskCreatePinnedToCore(
         measurementTask,
         "MeasurementTask",
@@ -739,6 +786,7 @@ void setup()
 // ====================================================================
 // LOOP
 // ====================================================================
+// Nhường CPU vì mọi việc chạy trong FreeRTOS task.
 void loop()
 {
     vTaskDelay(pdMS_TO_TICKS(1000));
